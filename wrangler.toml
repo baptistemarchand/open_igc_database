@@ -1,0 +1,28 @@
+name = "open-igc-database"
+compatibility_date = "2025-01-01"
+# SvelteKit's server runtime imports node:async_hooks — required or the Worker crashes.
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = ".svelte-kit/cloudflare"
+
+# Metadata store (serverless SQLite). Only lightweight flight metadata rows live here.
+# For production, replace database_id with the id printed by `wrangler d1 create open-igc-db`.
+[[d1_databases]]
+binding = "DB_NAME"
+database_name = "open-igc-db"
+database_id = "0b6f991e-6fb8-4fbc-90fb-600aa020f175"
+migrations_dir = "migrations"
+
+# Raw .igc file storage. Zero egress — public downloads cost no bandwidth.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "open-igc"
+
+# Non-secret vars. Leave R2_PUBLIC_URL empty in dev (download falls back to the /f/[id]
+# route which streams from the bucket binding). In production set it to the bucket's
+# public custom domain, e.g. "https://files.example.org", so downloads link straight to R2.
+[vars]
+R2_PUBLIC_URL = "https://pub-59f42d06fcf74dc38e73dee0bd01c99b.r2.dev"
+TURNSTILE_SITEKEY = ""
+
+# TURNSTILE_SECRET is a secret, not set here. In dev it is unset, so upload skips the
+# Turnstile check. In production: `wrangler pages secret put TURNSTILE_SECRET`.
