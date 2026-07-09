@@ -1,0 +1,6 @@
+.svelte-kit
+.wrangler
+build
+node_modules
+package-lock.json
+static
