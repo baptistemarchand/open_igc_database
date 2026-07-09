@@ -1,13 +1,13 @@
 <h1>Open IGC Database</h1>
 <p class="lead">
-	A free, open, public database of paragliding flights (IGC tracklogs), built for research.
+	A free, open, public database of paragliding flights (IGC tracklogs), built for research and anything else you want.
 	Upload your flights and browse everyone's.
 </p>
 
 <div class="cards">
 	<a class="card" href="/browse">
 		<h2>Browse flights &rarr;</h2>
-		<p>Search by pilot, date, and glider. Sort by duration or altitude.</p>
+		<p>Search by pilot, date, and glider.</p>
 	</a>
 	<a class="card" href="/upload">
 		<h2>Upload flights &rarr;</h2>

@@ -1,13 +1,13 @@
 <script lang="ts">
-	import favicon from '$lib/assets/favicon.svg';
-	import { page } from '$app/state';
+import { page } from "$app/state";
+import favicon from "$lib/assets/favicon.svg";
 
-	let { children } = $props();
+const { children } = $props();
 
-	const links = [
-		{ href: '/browse', label: 'Browse' },
-		{ href: '/upload', label: 'Upload' }
-	];
+const links = [
+	{ href: "/browse", label: "Browse" },
+	{ href: "/upload", label: "Upload" },
+];
 </script>
 
 <svelte:head>
@@ -30,10 +30,6 @@
 </main>
 
 <footer>
-	<p>
-		An open, public database of paragliding IGC tracklogs for research. Uploaded flights are
-		public. Please only upload flights you have the right to share.
-	</p>
 </footer>
 
 <style>
