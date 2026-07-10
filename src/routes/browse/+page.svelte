@@ -1,10 +1,26 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { formatDuration } from '$lib/format';
   import type { PageProps } from './$types';
 
   const { data }: PageProps = $props();
 
   const totalPages = $derived(Math.max(1, Math.ceil(data.total / data.pageSize)));
+
+  let pilot = $state(data.filters.pilot ?? '');
+  let glider = $state(data.filters.glider ?? '');
+  let from = $state(data.filters.from ?? '');
+  let to = $state(data.filters.to ?? '');
+
+  const hasFilter = $derived(pilot.trim() !== '' || glider.trim() !== '' || from !== '' || to !== '');
+
+  function clearFilters() {
+    pilot = '';
+    glider = '';
+    from = '';
+    to = '';
+    goto('/browse');
+  }
 
   /** Build a URL preserving current filters but overriding some params. */
   function link(overrides: Record<string, string | number>): string {
@@ -35,44 +51,61 @@
   <title>Browse flights — Open IGC Database</title>
 </svelte:head>
 
-<h1>Browse flights</h1>
+<h1 class="mb-5">Browse flights</h1>
 
-<form method="GET" class="filters">
-  <label>Pilot <input name="pilot" value={data.filters.pilot ?? ''} placeholder="name" /></label>
-  <label>Glider <input name="glider" value={data.filters.glider ?? ''} placeholder="model" /></label>
-  <label>From <input type="date" name="from" value={data.filters.from ?? ''} /></label>
-  <label>To <input type="date" name="to" value={data.filters.to ?? ''} /></label>
+<form method="GET" class="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-4">
+  <label class="flex flex-col gap-1 text-xs text-gray-500">
+    Pilot <input class="rounded-md border border-gray-300 p-1.5" name="pilot" bind:value={pilot} placeholder="name" />
+  </label>
+  <label class="flex flex-col gap-1 text-xs text-gray-500">
+    Glider <input
+      class="rounded-md border border-gray-300 p-1.5"
+      name="glider"
+      bind:value={glider}
+      placeholder="model"
+    />
+  </label>
+  <label class="flex flex-col gap-1 text-xs text-gray-500">
+    From <input class="rounded-md border border-gray-300 p-1.5" type="date" name="from" bind:value={from} />
+  </label>
+  <label class="flex flex-col gap-1 text-xs text-gray-500">
+    To <input class="rounded-md border border-gray-300 p-1.5" type="date" name="to" bind:value={to} />
+  </label>
   <input type="hidden" name="sort" value={data.sort} />
   <input type="hidden" name="dir" value={data.dir} />
-  <button type="submit">Search</button>
-  <a class="clear" href="/browse">Clear</a>
+  <button
+    class="rounded-md bg-blue-600 px-4 py-1.5 text-white disabled:cursor-not-allowed disabled:bg-blue-300"
+    type="submit"
+    disabled={!hasFilter}>Search</button
+  >
+  <button class="self-center text-sm text-gray-500" type="button" onclick={clearFilters}>Clear</button>
 </form>
 
-<p class="count">{data.total} flight{data.total === 1 ? '' : 's'}</p>
+<p class="text-sm text-gray-500">{data.total} flight{data.total === 1 ? '' : 's'}</p>
 
 {#if data.flights.length === 0}
-  <p class="empty">No flights match. <a href="/upload">Upload the first one?</a></p>
+  <p>No flights match. <a href="/upload">Upload the first one?</a></p>
 {:else}
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
+  <div class="overflow-x-auto">
+    <table class="w-full rounded-lg border border-gray-200 [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+      <thead class="bg-gray-50 text-sm [&_a]:text-gray-800">
+        <tr class="[&_th]:border-b [&_th]:border-gray-200 [&_th]:p-2 [&_th]:text-left">
           <th><a href={sortLink('date')}>Date{sortArrow('date')}</a></th>
           <th>Pilot</th>
           <th>Glider</th>
-          <th class="num"><a href={sortLink('duration')}>Duration{sortArrow('duration')}</a></th>
-          <th class="num"><a href={sortLink('altitude')}>Max alt{sortArrow('altitude')}</a></th>
+          <th class="text-right!"><a href={sortLink('duration')}>Duration{sortArrow('duration')}</a></th>
+          <th class="text-right!"><a href={sortLink('altitude')}>Max alt{sortArrow('altitude')}</a></th>
           <th></th>
         </tr>
       </thead>
-      <tbody>
+      <tbody class="[&_td]:border-b [&_td]:border-gray-100 [&_td]:p-2">
         {#each data.flights as f (f.id)}
-          <tr>
+          <tr class="hover:bg-blue-50">
             <td>{f.flight_date}</td>
             <td>{f.pilot_name ?? '—'}</td>
             <td>{f.glider_type ?? '—'}</td>
-            <td class="num">{formatDuration(f.duration_s)}</td>
-            <td class="num">{f.max_altitude != null ? `${f.max_altitude} m` : '—'}</td>
+            <td class="text-right">{formatDuration(f.duration_s)}</td>
+            <td class="text-right">{f.max_altitude != null ? `${f.max_altitude} m` : '—'}</td>
             <td><a href={`/flight/${f.id}`}>view</a></td>
           </tr>
         {/each}
@@ -81,92 +114,10 @@
   </div>
 
   {#if totalPages > 1}
-    <nav class="pager">
+    <nav class="mt-4 flex items-center gap-4 text-gray-500">
       {#if data.page > 1}<a href={link({ page: data.page - 1 })}>← Prev</a>{/if}
       <span>Page {data.page} of {totalPages}</span>
       {#if data.page < totalPages}<a href={link({ page: data.page + 1 })}>Next →</a>{/if}
     </nav>
   {/if}
 {/if}
-
-<style>
-  .filters {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    align-items: flex-end;
-    padding: 1rem;
-    border: 1px solid #e5e5e5;
-    border-radius: 10px;
-    background: #fff;
-    margin-bottom: 1rem;
-  }
-  .filters label {
-    display: flex;
-    flex-direction: column;
-    font-size: 0.8rem;
-    color: #666;
-    gap: 0.2rem;
-  }
-  .filters input {
-    padding: 0.4rem;
-    border: 1px solid #ccc;
-    border-radius: 6px;
-  }
-  .filters button {
-    padding: 0.45rem 1.1rem;
-    border: none;
-    border-radius: 6px;
-    background: #0064c8;
-    color: #fff;
-    cursor: pointer;
-  }
-  .clear {
-    font-size: 0.85rem;
-    color: #888;
-    align-self: center;
-  }
-  .count {
-    color: #666;
-    font-size: 0.9rem;
-  }
-  .table-wrap {
-    overflow-x: auto;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    background: #fff;
-    border: 1px solid #e5e5e5;
-    border-radius: 10px;
-    overflow: hidden;
-  }
-  th,
-  td {
-    padding: 0.55rem 0.75rem;
-    text-align: left;
-    border-bottom: 1px solid #eee;
-    white-space: nowrap;
-  }
-  th {
-    background: #f7f7f7;
-    font-size: 0.85rem;
-  }
-  th a {
-    color: #333;
-    text-decoration: none;
-  }
-  .num {
-    text-align: right;
-  }
-  tbody tr:hover {
-    background: #f5f9ff;
-  }
-  .pager {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-    margin-top: 1rem;
-    color: #666;
-  }
-</style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import '../app.css';
   import { page } from '$app/state';
   import favicon from '$lib/assets/favicon.svg';
 
@@ -33,6 +34,9 @@
 <footer></footer>
 
 <style>
+  :global(html) {
+    scrollbar-gutter: stable;
+  }
   :global(body) {
     margin: 0;
     font-family:

@@ -1,0 +1,11 @@
+@import 'tailwindcss';
+
+@layer base {
+  h1 {
+    @apply text-3xl font-bold text-[#1a1a1a];
+  }
+
+  a {
+    @apply text-blue-500;
+  }
+}

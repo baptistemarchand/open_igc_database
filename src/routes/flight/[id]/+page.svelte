@@ -10,11 +10,13 @@
   <title>Flight {f.flight_date}{f.pilot_name ? ` — ${f.pilot_name}` : ''} — Open IGC Database</title>
 </svelte:head>
 
-<p class="back"><a href="/browse">← Back to browse</a></p>
+<p class="text-sm"><a href="/browse">← Back to browse</a></p>
 
-<h1>Flight — {f.flight_date}</h1>
+<h1 class="my-5">Flight — {f.flight_date}</h1>
 
-<table class="meta">
+<table
+  class="w-full max-w-md rounded-lg border border-gray-200 [&_td]:border-b [&_td]:border-gray-100 [&_td]:px-3.5 [&_td]:py-2 [&_th]:w-2/5 [&_th]:border-b [&_th]:border-gray-100 [&_th]:bg-gray-50 [&_th]:px-3.5 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-gray-500"
+>
   <tbody>
     <tr><th>Date</th><td>{f.flight_date}</td></tr>
     <tr><th>Pilot</th><td>{f.pilot_name ?? '—'}</td></tr>
@@ -29,40 +31,6 @@
   </tbody>
 </table>
 
-<a class="download" href={data.downloadUrl} download>Download .igc</a>
-
-<style>
-  .back {
-    font-size: 0.9rem;
-  }
-  table.meta {
-    border-collapse: collapse;
-    background: #fff;
-    border: 1px solid #e5e5e5;
-    border-radius: 10px;
-    overflow: hidden;
-    max-width: 30rem;
-    width: 100%;
-  }
-  th,
-  td {
-    padding: 0.55rem 0.9rem;
-    text-align: left;
-    border-bottom: 1px solid #eee;
-  }
-  th {
-    width: 40%;
-    color: #666;
-    font-weight: 500;
-    background: #fafafa;
-  }
-  .download {
-    display: inline-block;
-    margin-top: 1.25rem;
-    padding: 0.55rem 1.5rem;
-    border-radius: 8px;
-    background: #0064c8;
-    color: #fff;
-    text-decoration: none;
-  }
-</style>
+<a class="mt-5 inline-block rounded-lg bg-blue-600 px-6 py-2 text-white" href={data.downloadUrl} download
+  >Download .igc</a
+>

@@ -8,28 +8,32 @@
   <title>API — Open IGC Database</title>
 </svelte:head>
 
-<h1>API</h1>
+<h1 class="mb-4">API</h1>
 
-<p class="intro">
-  Open IGC Database exposes a single public, read-only JSON endpoint. No API key or authentication is required.
-</p>
+<p class="mb-10 text-gray-600">No API key or authentication is required.</p>
 
-<h2><code>GET /flights</code></h2>
+<h2 class="mt-12 mb-4 text-xl font-semibold">
+  <code class="font-mono">GET /flights</code>
+</h2>
 
-<p>Returns every flight in the database as a JSON array, newest first.</p>
+<p class="my-4 leading-relaxed">Returns every flight in the database as a JSON array, newest first.</p>
 
-<h3>Example</h3>
+<h3 class="mt-8 mb-3 text-base font-semibold">Example</h3>
 
-<pre><code>curl {`${origin}/flights`}</code></pre>
+<pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
+    class="font-mono text-sm whitespace-pre">curl {`${origin}/flights`}</code
+  ></pre>
 
-<h3>Response fields</h3>
+<h3 class="mt-8 mb-3 text-base font-semibold">Response fields</h3>
 
-<div class="table-wrap">
-  <table>
-    <thead>
-      <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<div class="my-5 overflow-x-auto">
+  <table class="w-full rounded-lg border border-gray-200 text-sm [&_code]:font-mono [&_code]:text-[0.85em]">
+    <thead class="bg-gray-50 text-xs">
+      <tr class="[&_th]:border-b [&_th]:border-gray-200 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left">
+        <th>Field</th><th>Type</th><th>Description</th>
+      </tr>
     </thead>
-    <tbody>
+    <tbody class="[&_td]:border-b [&_td]:border-gray-100 [&_td]:px-2.5 [&_td]:py-1.5">
       <tr><td><code>id</code></td><td>string</td><td>SHA-256 of the IGC file (also the file key)</td></tr>
       <tr><td><code>flight_date</code></td><td>string</td><td>Flight date, <code>YYYY-MM-DD</code></td></tr>
       <tr><td><code>pilot_name</code></td><td>string | null</td><td>Pilot name from the IGC header</td></tr>
@@ -48,9 +52,10 @@
   </table>
 </div>
 
-<h3>Sample response</h3>
+<h3 class="mt-8 mb-3 text-base font-semibold">Sample response</h3>
 
-<pre><code
+<pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
+    class="font-mono text-sm whitespace-pre"
     >{`[
   {
     "id": "a1b2c3…",
@@ -70,57 +75,3 @@
   }
 ]`}</code
   ></pre>
-
-<style>
-  .intro {
-    color: #444;
-  }
-  h2 {
-    margin-top: 2rem;
-  }
-  h2 code {
-    background: none;
-    padding: 0;
-    font-size: inherit;
-  }
-  code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.9em;
-    background: #f0f0f0;
-    padding: 0.1rem 0.3rem;
-    border-radius: 4px;
-  }
-  pre {
-    background: #f7f7f7;
-    border: 1px solid #e5e5e5;
-    border-radius: 8px;
-    padding: 0.9rem 1rem;
-    overflow-x: auto;
-  }
-  pre code {
-    background: none;
-    padding: 0;
-    white-space: pre;
-  }
-  .table-wrap {
-    overflow-x: auto;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    background: #fff;
-    border: 1px solid #e5e5e5;
-    border-radius: 10px;
-    overflow: hidden;
-  }
-  th,
-  td {
-    padding: 0.5rem 0.75rem;
-    text-align: left;
-    border-bottom: 1px solid #eee;
-  }
-  th {
-    background: #f7f7f7;
-    font-size: 0.85rem;
-  }
-</style>
