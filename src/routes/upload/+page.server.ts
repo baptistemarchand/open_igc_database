@@ -1,9 +1,7 @@
 import { fail } from '@sveltejs/kit';
-import { getFlight, upsertFlight } from '$lib/db';
-import { extractMetadata, stripIdentifyingHeaders } from '$lib/igc';
+import { ingestIgc } from '$lib/upload';
 import type { Actions, PageServerLoad } from './$types';
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — IGC files are small
 const MAX_FILES = 500;
 
 export const load: PageServerLoad = async ({ platform }) => {
@@ -22,11 +20,6 @@ async function verifyTurnstile(secret: string, token: string, ip: string | null)
   });
   const data = (await res.json()) as { success: boolean };
   return data.success === true;
-}
-
-async function sha256Hex(buf: ArrayBuffer): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', buf);
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 interface FileResult {
@@ -66,49 +59,15 @@ export const actions: Actions = {
 
     for (const file of files) {
       try {
-        if (file.size > MAX_FILE_BYTES) {
-          results.push({
-            name: file.name,
-            status: 'error',
-            error: 'File too large (max 5 MB).',
-          });
+        const result = await ingestIgc({ DB_NAME: DB, BUCKET }, await file.arrayBuffer(), {
+          anonymous,
+          uploadedAt: now,
+        });
+        if (!result.ok) {
+          results.push({ name: file.name, status: 'error', error: result.error });
           continue;
         }
-        const original = await file.arrayBuffer();
-        const text = new TextDecoder().decode(original);
-
-        const parsed = extractMetadata(text);
-        if (!parsed.ok) {
-          results.push({
-            name: file.name,
-            status: 'error',
-            error: parsed.error,
-          });
-          continue;
-        }
-
-        // The id ignores identifying header fields, so the same track dedups to
-        // one flight whether or not it was uploaded anonymously.
-        const scrubbed = new TextEncoder().encode(stripIdentifyingHeaders(text)).buffer;
-        const id = await sha256Hex(scrubbed);
-        const storeBuf = anonymous ? scrubbed : original;
-
-        await BUCKET.put(`${id}.igc`, storeBuf, {
-          httpMetadata: { contentType: 'text/plain; charset=utf-8' },
-        });
-        const existed = (await getFlight(DB, id)) != null;
-        await upsertFlight(DB, {
-          id,
-          ...parsed.meta,
-          pilot_name: anonymous ? 'Anonymous' : parsed.meta.pilot_name,
-          size_bytes: storeBuf.byteLength,
-          uploaded_at: now,
-        });
-        results.push({
-          name: file.name,
-          status: existed ? 'duplicate' : 'added',
-          id,
-        });
+        results.push({ name: file.name, status: result.status, id: result.flight.id });
       } catch (e) {
         results.push({
           name: file.name,

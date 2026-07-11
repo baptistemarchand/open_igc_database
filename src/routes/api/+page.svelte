@@ -75,3 +75,70 @@
   }
 ]`}</code
   ></pre>
+
+<h2 class="mt-16 mb-4 text-xl font-semibold">
+  <code class="font-mono">POST /flights</code>
+</h2>
+
+<p class="my-4 leading-relaxed">
+  Upload a single <code class="font-mono">.igc</code> file, sent as the raw request body. The file is parsed, validated and
+  stored. Flights are deduplicated by content, so re-uploading the same track is safe.
+</p>
+
+<p class="my-4 leading-relaxed">
+  Add <code class="font-mono">?anonymous=1</code> to strip identifying headers (pilot, crew, glider registration,
+  competition id) before storing and list the pilot as
+  <code class="font-mono">Anonymous</code>.
+</p>
+
+<h3 class="mt-8 mb-3 text-base font-semibold">Example</h3>
+
+<pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
+    class="font-mono text-sm whitespace-pre">curl --data-binary @flight.igc {`${origin}/flights`}</code
+  ></pre>
+
+<h3 class="mt-8 mb-3 text-base font-semibold">Responses</h3>
+
+<div class="my-5 overflow-x-auto">
+  <table class="w-full rounded-lg border border-gray-200 text-sm [&_code]:font-mono [&_code]:text-[0.85em]">
+    <thead class="bg-gray-50 text-xs">
+      <tr class="[&_th]:border-b [&_th]:border-gray-200 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left">
+        <th>Status</th><th>Meaning</th>
+      </tr>
+    </thead>
+    <tbody class="[&_td]:border-b [&_td]:border-gray-100 [&_td]:px-2.5 [&_td]:py-1.5">
+      <tr><td><code>201</code></td><td>Flight added</td></tr>
+      <tr><td><code>200</code></td><td>Duplicate — this track was already stored</td></tr>
+      <tr><td><code>400</code></td><td>Empty body or not a valid IGC track (see <code>error</code>)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p class="my-4 leading-relaxed">
+  On success the response is the flight object (same fields as <code class="font-mono">GET /flights</code>
+  above) plus a <code class="font-mono">status</code> field of
+  <code class="font-mono">"added"</code> or <code class="font-mono">"duplicate"</code>.
+</p>
+
+<h3 class="mt-8 mb-3 text-base font-semibold">Sample response</h3>
+
+<pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
+    class="font-mono text-sm whitespace-pre"
+    >{`{
+  "status": "added",
+  "id": "a1b2c3…",
+  "flight_date": "2024-06-15",
+  "pilot_name": "Jane Doe",
+  "takeoff_lat": 45.9237,
+  "takeoff_lon": 6.8694,
+  "landing_lat": 45.8992,
+  "landing_lon": 6.1294,
+  "duration_s": 5432,
+  "max_altitude": 2850,
+  "point_count": 5431,
+  "glider_type": "Ozone Zeno 2",
+  "size_bytes": 184320,
+  "uploaded_at": 1718460000,
+  "url": "https://…/a1b2c3….igc"
+}`}</code
+  ></pre>
