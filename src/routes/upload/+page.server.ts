@@ -14,7 +14,7 @@ interface FileResult {
 export const actions: Actions = {
   default: async ({ request, platform }) => {
     if (!platform?.env) return fail(503, { error: 'Storage unavailable.' });
-    const { DB_NAME: DB, BUCKET } = platform.env;
+    const { DB, BUCKET } = platform.env;
 
     const form = await request.formData();
 
@@ -31,7 +31,7 @@ export const actions: Actions = {
 
     for (const file of files) {
       try {
-        const result = await ingestIgc({ DB_NAME: DB, BUCKET }, await file.arrayBuffer(), {
+        const result = await ingestIgc({ DB, BUCKET }, await file.arrayBuffer(), {
           anonymous,
           uploadedAt: now,
         });

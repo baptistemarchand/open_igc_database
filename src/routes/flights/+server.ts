@@ -19,7 +19,7 @@ function fileUrl(f: Flight, env: App.Platform['env'], origin: string): string {
 export const GET: RequestHandler = async ({ platform, url }) => {
   if (!platform?.env) throw error(503, 'Storage unavailable');
 
-  const flights = await getAllFlights(platform.env.DB_NAME);
+  const flights = await getAllFlights(platform.env.DB);
   const env = platform.env;
 
   const items = flights.map((f) => ({

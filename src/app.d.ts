@@ -10,7 +10,7 @@ declare global {
     // interface PageState {}
     interface Platform {
       env: {
-        DB_NAME: D1Database;
+        DB: D1Database;
         BUCKET: R2Bucket;
         /** Public base URL of the R2 bucket, e.g. "https://files.example.org". Empty in dev. */
         R2_PUBLIC_URL?: string;

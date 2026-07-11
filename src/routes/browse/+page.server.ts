@@ -21,7 +21,7 @@ export const load: PageServerLoad = async ({ url, platform }) => {
     to: q.get('to') ?? undefined,
   };
 
-  const { flights, total } = await searchFlights(platform.env.DB_NAME, {
+  const { flights, total } = await searchFlights(platform.env.DB, {
     ...filters,
     sort,
     dir,

@@ -7,7 +7,7 @@ pages_build_output_dir = ".svelte-kit/cloudflare"
 # Metadata store (serverless SQLite). Only lightweight flight metadata rows live here.
 # For production, replace database_id with the id printed by `wrangler d1 create open-igc-db`.
 [[d1_databases]]
-binding = "DB_NAME"
+binding = "DB"
 database_name = "open-igc-db"
 database_id = "0b6f991e-6fb8-4fbc-90fb-600aa020f175"
 migrations_dir = "migrations"

@@ -6,7 +6,7 @@ export const load: PageServerLoad = async ({ params, platform }) => {
   if (!platform?.env) throw error(503, 'Database unavailable');
   if (!/^[0-9a-f]{64}$/.test(params.id)) throw error(404, 'Not found');
 
-  const flight = await getFlight(platform.env.DB_NAME, params.id);
+  const flight = await getFlight(platform.env.DB, params.id);
   if (!flight) throw error(404, 'Flight not found');
 
   // In production, link straight to the R2 public domain (no Worker cost). In dev

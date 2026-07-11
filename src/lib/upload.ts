@@ -12,7 +12,7 @@ export async function sha256Hex(buf: ArrayBuffer): Promise<string> {
 
 /** The storage bindings a single ingest needs. */
 export interface IngestEnv {
-  DB_NAME: D1Database;
+  DB: D1Database;
   BUCKET: R2Bucket;
 }
 
@@ -54,7 +54,7 @@ export async function ingestIgc(env: IngestEnv, buf: ArrayBuffer, opts: IngestOp
     httpMetadata: { contentType: 'text/plain; charset=utf-8' },
   });
 
-  const existed = (await getFlight(env.DB_NAME, id)) != null;
+  const existed = (await getFlight(env.DB, id)) != null;
   const flight: Flight = {
     id,
     ...parsed.meta,
@@ -62,7 +62,7 @@ export async function ingestIgc(env: IngestEnv, buf: ArrayBuffer, opts: IngestOp
     size_bytes: storeBuf.byteLength,
     uploaded_at: opts.uploadedAt,
   };
-  await upsertFlight(env.DB_NAME, flight);
+  await upsertFlight(env.DB, flight);
 
   return { ok: true, status: existed ? 'duplicate' : 'added', flight };
 }
