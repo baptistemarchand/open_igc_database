@@ -2,16 +2,13 @@
   import { enhance } from '$app/forms';
   import type { PageProps } from './$types';
 
-  let { data, form }: PageProps = $props();
+  let { form }: PageProps = $props();
   let submitting = $state(false);
   let hasFiles = $state(false);
 </script>
 
 <svelte:head>
   <title>Upload flights - Open IGC Database</title>
-  {#if data.turnstileSiteKey}
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-  {/if}
 </svelte:head>
 
 <h1 class="mb-5">Upload flights</h1>
@@ -44,10 +41,6 @@
         hover:file:bg-blue-100"
     onchange={(e) => (hasFiles = e.currentTarget.files !== null && e.currentTarget.files.length > 0)}
   />
-
-  {#if data.turnstileSiteKey}
-    <div class="cf-turnstile" data-sitekey={data.turnstileSiteKey}></div>
-  {/if}
 
   <label class="flex items-start gap-2 text-sm text-gray-600">
     <input type="checkbox" name="anonymous" class="mt-0.5" />

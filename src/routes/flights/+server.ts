@@ -35,8 +35,7 @@ export const GET: RequestHandler = async ({ platform, url }) => {
 /**
  * Public upload API: ingest a single raw .igc file sent as the request body
  * (e.g. `curl --data-binary @flight.igc`). Pass `?anonymous=1` to strip identifying
- * headers and list the pilot as "Anonymous". No auth or anti-spam check — the browser
- * form at /upload keeps the Turnstile check; this endpoint is for scripts.
+ * headers and list the pilot as "Anonymous". No auth — this endpoint is for scripts.
  *
  * Responds with the flight row plus `url` and `status`: HTTP 201 when the flight is new,
  * 200 when the same track was already stored (dedup by content hash), 400 for junk.

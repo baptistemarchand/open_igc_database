@@ -22,7 +22,3 @@ bucket_name = "open-igc"
 # public custom domain, e.g. "https://files.example.org", so downloads link straight to R2.
 [vars]
 R2_PUBLIC_URL = "https://pub-59f42d06fcf74dc38e73dee0bd01c99b.r2.dev"
-TURNSTILE_SITEKEY = ""
-
-# TURNSTILE_SECRET is a secret, not set here. In dev it is unset, so upload skips the
-# Turnstile check. In production: `wrangler pages secret put TURNSTILE_SECRET`.

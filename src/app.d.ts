@@ -14,10 +14,6 @@ declare global {
         BUCKET: R2Bucket;
         /** Public base URL of the R2 bucket, e.g. "https://files.example.org". Empty in dev. */
         R2_PUBLIC_URL?: string;
-        /** Cloudflare Turnstile site key (public). Empty in dev → widget hidden, check skipped. */
-        TURNSTILE_SITEKEY?: string;
-        /** Cloudflare Turnstile secret. Unset in dev → upload skips the check. */
-        TURNSTILE_SECRET?: string;
       };
     }
   }

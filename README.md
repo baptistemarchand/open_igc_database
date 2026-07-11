@@ -35,7 +35,7 @@ npm run dev
 
 `vite dev` exposes the R2/D1 bindings on `event.platform.env` via the adapter's
 platformProxy (local Miniflare state under `.wrangler/state`) — no cloud calls, no keys.
-In dev, Turnstile is skipped (no secret) and downloads use the `/f/[id]` fallback.
+In dev, downloads use the `/f/[id]` fallback.
 
 Type-check: `npm run check`.
 
@@ -49,13 +49,7 @@ Type-check: `npm run check`.
 2. Apply migrations to the remote DB: `npx wrangler d1 migrations apply open-igc-db --remote`
 3. Give the R2 bucket a public custom domain and set `R2_PUBLIC_URL` (in `wrangler.toml`
    `[vars]`) to it, e.g. `https://files.example.org`, so downloads link straight to R2.
-4. For spam protection, create a Cloudflare Turnstile widget and set:
-   ```sh
-   # public site key (non-secret) → wrangler.toml [vars] TURNSTILE_SITEKEY
-   npx wrangler pages secret put TURNSTILE_SECRET   # the secret key
-   ```
-   When these are unset the upload form works without a challenge.
-5. Build & deploy: `npm run build` then deploy per your Cloudflare Pages/Workers setup.
+4. Build & deploy: `npm run build` then deploy per your Cloudflare Pages/Workers setup.
 
 ## Notes & possible future work
 
