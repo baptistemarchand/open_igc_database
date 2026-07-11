@@ -5,6 +5,9 @@
   let { form }: PageProps = $props();
   let submitting = $state(false);
   let hasFiles = $state(false);
+  // Set when the request fails before reaching our action — e.g. Cloudflare
+  // rate-limits the edge and returns a 503 that `enhance` can't deserialize.
+  let requestError = $state<string | null>(null);
 </script>
 
 <svelte:head>
@@ -22,8 +25,17 @@
   class="flex w-max flex-col items-start gap-4 rounded-lg border border-gray-200 p-5"
   use:enhance={() => {
     submitting = true;
-    return async ({ update }) => {
-      await update();
+    requestError = null;
+    return async ({ result, update }) => {
+      // A `type: 'error'` result here means the response never made it back as a
+      // SvelteKit action result — typically Cloudflare rate-limiting the edge and
+      // returning a 503. Show a friendly message instead of the error boundary.
+      if (result.type === 'error' || ('status' in result && result.status === 503)) {
+        requestError =
+          'The server is temporarily overloaded (too many uploads at once). Please wait a few minutes and try again.';
+      } else {
+        await update();
+      }
       submitting = false;
     };
   }}
@@ -72,7 +84,9 @@
   {/if}
 </form>
 
-{#if form?.error}
+{#if requestError}
+  <p class="mt-4 rounded-md bg-red-50 px-3 py-2 text-red-700">{requestError}</p>
+{:else if form?.error}
   <p class="text-red-600">{form.error}</p>
 {/if}
 
