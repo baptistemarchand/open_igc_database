@@ -30,6 +30,8 @@
     "wrangler": "^4.109.0"
   },
   "dependencies": {
-    "igc-parser": "^2.0.0"
+    "@types/leaflet": "^1.9.21",
+    "igc-parser": "^2.0.0",
+    "leaflet": "^1.9.4"
   }
 }

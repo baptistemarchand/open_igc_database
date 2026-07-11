@@ -57,9 +57,13 @@ trap 'rm -f "$results"' EXIT
 
 # One curl per file. `-w %{http_code}` reports the status; curl itself only fails on
 # network errors (not on HTTP 4xx/5xx), so a rejected file still prints its code.
+# `--retry` transparently retries transient failures (429, 500, 502, 503, 504 and
+# connection errors) with exponential backoff, so a momentarily overloaded server
+# recovers instead of dropping the file. Only the final status is printed.
 find "$DIR" -maxdepth 1 -type f -name '*.igc' -print0 \
   | xargs -0 -P "$JOBS" -I {} sh -c '
       code=$(curl -s -o /dev/null -w "%{http_code}" \
+        --retry 5 --retry-delay 2 --retry-max-time 120 --retry-connrefused \
         --data-binary @"$1" \
         -H "Content-Type: application/octet-stream" \
         "$0")

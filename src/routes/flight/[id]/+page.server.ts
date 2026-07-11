@@ -1,6 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { getFlight } from '$lib/db';
+import { extractTrack } from '$lib/igc';
 
 export const load: PageServerLoad = async ({ params, platform }) => {
   if (!platform?.env) throw error(503, 'Database unavailable');
@@ -14,5 +15,10 @@ export const load: PageServerLoad = async ({ params, platform }) => {
   const base = platform.env.R2_PUBLIC_URL?.replace(/\/$/, '');
   const downloadUrl = base ? `${base}/${flight.id}.igc` : `/f/${flight.id}`;
 
-  return { flight, downloadUrl };
+  // Track points aren't stored in D1 — re-parse the raw .igc from R2 to draw the map.
+  // A missing/unreadable object just yields an empty track and the page omits the map.
+  const obj = await platform.env.BUCKET.get(`${flight.id}.igc`);
+  const track = obj ? extractTrack(await obj.text()) : [];
+
+  return { flight, downloadUrl, track };
 };

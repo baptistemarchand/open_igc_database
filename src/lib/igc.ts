@@ -17,6 +17,20 @@ export interface FlightMetadata {
 export type ExtractResult = { ok: true; meta: FlightMetadata } | { ok: false; error: string };
 
 /**
+ * Parse an IGC file and return its track as [lat, lon] pairs (valid fixes only).
+ * Server-side only, same parse call as `extractMetadata`. Returns [] for anything
+ * unparseable so the caller can just skip drawing a map.
+ */
+export function extractTrack(text: string): [number, number][] {
+  try {
+    const parsed = IGCParser.parse(text, { lenient: true });
+    return parsed.fixes.filter((f) => f.valid).map((f) => [f.latitude, f.longitude]);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * IGC H-record types that carry personally identifying info. Matched on the
  * 3-char header code at `line.slice(2, 5)` — the same slice `igc-parser` uses to
  * dispatch headers. Covers pilot-in-charge, second crew/copilot, glider
