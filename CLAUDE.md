@@ -40,9 +40,13 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
   PLT/CM2/GID/CID (keeps them structurally valid); glider _type_ GTY is kept on purpose
   (searchable, not identifying). When `anonymous`, the stripped bytes are stored and
   `pilot_name` is set to `"Anonymous"`.
-- **All IGC parsing is server-side at upload only** (`src/lib/igc.ts`). No client
-  parsing, no maps, no charts, and track points are never stored — D1 holds only the
-  metadata columns in `migrations/0001_init.sql`.
+- **Metadata parsing/validation is server-side at upload only** (`src/lib/igc.ts`,
+  via `igc-parser`). Track points are never stored — D1 holds only the metadata columns
+  in `migrations/0001_init.sql`. The one exception is the **detail-page map**: the
+  browser fetches the raw `.igc` from R2 and parses just the B-record lat/lons itself
+  (tiny inline parser in `flight/[id]/+page.svelte`), so the worker never re-parses on a
+  read. Cross-origin fetches of `R2_PUBLIC_URL` therefore need a **CORS rule** on the
+  bucket allowing the site origin (a plain `<a download>` doesn't, but `fetch()` does).
 - **Uploads are rejected** for: >5 MB, unparseable, <5 valid fixes, bad date, or
   out-of-range coords. `ingestIgc`/`extractMetadata` never throw on bad input — they
   return `{ ok: false, error }`.
@@ -51,6 +55,10 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
 
 - `src/lib/upload.ts` — `ingestIgc`, the single ingest pipeline (validate → R2 → D1),
   shared by the form action and the JSON API so both behave identically.
+- **Browser upload fans out per-file**: with JS on, `upload/+page.svelte` POSTs each
+  file separately to `/flights` (one file = one worker invocation = its own CPU budget),
+  streaming results in. The multi-file server action in `upload/+page.server.ts` is the
+  no-JS fallback (whole batch in one invocation — the CPU-heavy path we avoid via JS).
 - `src/lib/igc.ts` — parse/validate/extract + `stripIdentifyingHeaders`.
 - `src/lib/db.ts` — all D1 queries. `searchFlights` sort is whitelisted via
   `SORT_COLUMNS` (never interpolate a raw sort param); filters use bound `?` params.

@@ -1,13 +1,91 @@
 <script lang="ts">
-  import { enhance } from '$app/forms';
   import type { PageProps } from './$types';
 
   let { form }: PageProps = $props();
+
+  interface FileResult {
+    name: string;
+    status: 'added' | 'duplicate' | 'error';
+    id?: string;
+    error?: string;
+  }
+
   let submitting = $state(false);
   let hasFiles = $state(false);
-  // Set when the request fails before reaching our action — e.g. Cloudflare
-  // rate-limits the edge and returns a 503 that `enhance` can't deserialize.
+  // Set when a request fails before reaching the ingest — e.g. Cloudflare
+  // rate-limits the edge and returns a 503.
   let requestError = $state<string | null>(null);
+  // Populated by the JS fan-out path; `form?.results` is the no-JS server-action path.
+  let results = $state<FileResult[] | null>(null);
+  let done = $state(0);
+  let total = $state(0);
+
+  const displayResults = $derived(results ?? form?.results ?? null);
+  const added = $derived(displayResults?.filter((r) => r.status === 'added').length ?? 0);
+  const dup = $derived(displayResults?.filter((r) => r.status === 'duplicate').length ?? 0);
+  const errs = $derived(displayResults?.filter((r) => r.status === 'error').length ?? 0);
+
+  const OVERLOADED_MSG =
+    'The server is temporarily overloaded (too many uploads at once). Please wait a few minutes and try again.';
+
+  /**
+   * Upload one file via the JSON API (POST /flights), which shares the exact same
+   * `ingestIgc` pipeline as the form action. One request per file means one worker
+   * invocation per file — each gets its own CPU budget instead of parsing the whole
+   * batch on a single, CPU-metered invocation.
+   */
+  async function uploadOne(file: File, anonymous: boolean, onOverload: () => void): Promise<FileResult> {
+    try {
+      const res = await fetch(`/flights${anonymous ? '?anonymous=1' : ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
+      });
+      if (res.status === 503) {
+        onOverload();
+        return { name: file.name, status: 'error', error: 'Server overloaded — try again shortly.' };
+      }
+      const data = (await res.json().catch(() => ({}))) as { status?: string; id?: string; error?: string };
+      if (!res.ok) return { name: file.name, status: 'error', error: data.error ?? `Upload failed (${res.status}).` };
+      return { name: file.name, status: data.status === 'duplicate' ? 'duplicate' : 'added', id: data.id };
+    } catch {
+      return { name: file.name, status: 'error', error: 'Network error.' };
+    }
+  }
+
+  async function handleSubmit(e: SubmitEvent) {
+    e.preventDefault();
+    const formEl = e.currentTarget as HTMLFormElement;
+    const fileInput = formEl.elements.namedItem('files') as HTMLInputElement;
+    const files = fileInput.files ? [...fileInput.files].filter((f) => f.size > 0) : [];
+    if (files.length === 0) return;
+    const anonymous = (formEl.elements.namedItem('anonymous') as HTMLInputElement | null)?.checked ?? false;
+
+    submitting = true;
+    requestError = null;
+    results = [];
+    done = 0;
+    total = files.length;
+    let sawOverload = false;
+
+    // Fan out a few files at a time so we don't flood the edge, streaming results in as
+    // they land. The server action still handles the no-JS path as one batch request.
+    const CONCURRENCY = 4;
+    const queue = [...files];
+    const collected: FileResult[] = [];
+    const worker = async () => {
+      for (let file = queue.shift(); file; file = queue.shift()) {
+        const r = await uploadOne(file, anonymous, () => (sawOverload = true));
+        collected.push(r);
+        results = [...collected];
+        done += 1;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, files.length) }, worker));
+
+    if (sawOverload) requestError = OVERLOADED_MSG;
+    submitting = false;
+  }
 </script>
 
 <svelte:head>
@@ -19,26 +97,13 @@
   Select one or more <code>.igc</code> files. They become publicly available for anyone to download and use for research.
 </p>
 
+<!-- JS path: handleSubmit fans out one request per file. Without JS the form posts
+     normally to the server action (single batch request) as a fallback. -->
 <form
   method="POST"
   enctype="multipart/form-data"
   class="flex w-max flex-col items-start gap-4 rounded-lg border border-gray-200 p-5"
-  use:enhance={() => {
-    submitting = true;
-    requestError = null;
-    return async ({ result, update }) => {
-      // A `type: 'error'` result here means the response never made it back as a
-      // SvelteKit action result — typically Cloudflare rate-limiting the edge and
-      // returning a 503. Show a friendly message instead of the error boundary.
-      if (result.type === 'error' || ('status' in result && result.status === 503)) {
-        requestError =
-          'The server is temporarily overloaded (too many uploads at once). Please wait a few minutes and try again.';
-      } else {
-        await update();
-      }
-      submitting = false;
-    };
-  }}
+  onsubmit={handleSubmit}
 >
   <input
     type="file"
@@ -79,7 +144,7 @@
       disabled={submitting}
       class="cursor-pointer rounded-lg bg-blue-600 px-6 py-2 text-white disabled:cursor-default disabled:opacity-60"
     >
-      {submitting ? 'Uploading…' : 'Upload'}
+      {submitting ? `Uploading… ${done}/${total}` : 'Upload'}
     </button>
   {/if}
 </form>
@@ -90,15 +155,12 @@
   <p class="text-red-600">{form.error}</p>
 {/if}
 
-{#if form?.results}
-  {@const added = form.results.filter((r) => r.status === 'added').length}
-  {@const dup = form.results.filter((r) => r.status === 'duplicate').length}
-  {@const errs = form.results.filter((r) => r.status === 'error').length}
+{#if displayResults}
   <div class="mt-6 mb-3">
     <strong>{added} added</strong>, {dup} already in database, {errs} failed.
   </div>
   <ul class="w-max list-none p-0">
-    {#each form.results as r (r.name)}
+    {#each displayResults as r (r.name)}
       <li
         class="mb-1.5 flex justify-between gap-4 rounded-md px-3 py-2 {r.status === 'added'
           ? 'bg-green-50'

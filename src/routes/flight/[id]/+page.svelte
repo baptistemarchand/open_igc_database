@@ -7,13 +7,45 @@
   const f = $derived(data.flight);
 
   let mapEl: HTMLDivElement | undefined = $state();
+  // Optimistically show the map box; hidden if the track can't be fetched/parsed.
+  let showMap = $state(true);
+
+  /**
+   * Parse valid-fix coordinates straight from IGC B-records, client-side. Only lat/lon
+   * are needed for the map, so this avoids both a worker-side parse and pulling the full
+   * `igc-parser` into the browser bundle. Matches igc-parser's decoding: DDMMmmm /
+   * DDDMMmmm minutes-in-thousandths, N/S/E/W sign, and the 'A' (valid) fix-validity flag.
+   */
+  function parseTrack(text: string): [number, number][] {
+    const pts: [number, number][] = [];
+    for (const line of text.split('\n')) {
+      if (line[0] !== 'B' || line.length < 25 || line[24] !== 'A') continue;
+      const lat = (+line.slice(7, 9) + +line.slice(9, 14) / 60000) * (line[14] === 'S' ? -1 : 1);
+      const lon = (+line.slice(15, 18) + +line.slice(18, 23) / 60000) * (line[23] === 'W' ? -1 : 1);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) pts.push([lat, lon]);
+    }
+    return pts;
+  }
 
   onMount(() => {
-    if (!mapEl || data.track.length < 2) return;
-
     let map: import('leaflet').Map | undefined;
     // Leaflet touches window/DOM, so load it only in the browser (never during SSR).
     (async () => {
+      // Fetch the raw .igc from R2 (or the /f dev fallback) and parse it here, off the
+      // worker. Cross-origin R2 reads need a CORS rule allowing this site's origin.
+      let track: [number, number][] = [];
+      try {
+        const res = await fetch(data.downloadUrl);
+        if (res.ok) track = parseTrack(await res.text());
+      } catch {
+        /* leave track empty — map is just omitted */
+      }
+      if (track.length < 2) {
+        showMap = false;
+        return;
+      }
+      if (!mapEl) return;
+
       const L = (await import('leaflet')).default;
       await import('leaflet/dist/leaflet.css');
       if (!mapEl) return;
@@ -24,12 +56,12 @@
         attribution: '© OpenStreetMap contributors',
       }).addTo(map);
 
-      const line = L.polyline(data.track, { color: '#2563eb', weight: 3 }).addTo(map);
+      const line = L.polyline(track, { color: '#2563eb', weight: 3 }).addTo(map);
       map.fitBounds(line.getBounds(), { padding: [20, 20] });
 
       const dot = (color: string) => ({ radius: 5, color, fillColor: color, fillOpacity: 1, weight: 1 }) as const;
-      L.circleMarker(data.track[0], dot('#16a34a')).addTo(map); // takeoff
-      L.circleMarker(data.track[data.track.length - 1], dot('#dc2626')).addTo(map); // landing
+      L.circleMarker(track[0], dot('#16a34a')).addTo(map); // takeoff
+      L.circleMarker(track[track.length - 1], dot('#dc2626')).addTo(map); // landing
     })();
 
     return () => map?.remove();
@@ -45,7 +77,7 @@
 <h1 class="my-5">Flight — {f.flight_date}</h1>
 
 <div class="flex flex-col md:flex-row gap-4">
-  {#if data.track.length > 1}
+  {#if showMap}
     <div bind:this={mapEl} class="w-full h-64 md:h-auto rounded-lg border border-gray-200"></div>
   {/if}
 

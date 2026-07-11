@@ -17,20 +17,6 @@ export interface FlightMetadata {
 export type ExtractResult = { ok: true; meta: FlightMetadata } | { ok: false; error: string };
 
 /**
- * Parse an IGC file and return its track as [lat, lon] pairs (valid fixes only).
- * Server-side only, same parse call as `extractMetadata`. Returns [] for anything
- * unparseable so the caller can just skip drawing a map.
- */
-export function extractTrack(text: string): [number, number][] {
-  try {
-    const parsed = IGCParser.parse(text, { lenient: true });
-    return parsed.fixes.filter((f) => f.valid).map((f) => [f.latitude, f.longitude]);
-  } catch {
-    return [];
-  }
-}
-
-/**
  * IGC H-record types that carry personally identifying info. Matched on the
  * 3-char header code at `line.slice(2, 5)` — the same slice `igc-parser` uses to
  * dispatch headers. Covers pilot-in-charge, second crew/copilot, glider
@@ -47,7 +33,17 @@ const IDENTIFYING_HEADERS = new Set(['PLT', 'CM2', 'GID', 'CID']);
  * the anonymized file that gets stored and to compute a name-independent id.
  */
 export function stripIdentifyingHeaders(text: string): string {
-  return text
+  // Identifying H-records live only in the header block, which always precedes the
+  // first B-record (the fixes — the bulk of the file). So split/map/join just the
+  // head and copy the untouched tail as a single slice: O(header) instead of
+  // O(file) allocation, which matters for multi-MB tracks on a CPU-metered worker.
+  // headEnd = start of the fixes block: 0 if the file opens with a B-record, else
+  // just after the newline before the first '\nB', else the whole file has no fixes.
+  const headEnd = text.startsWith('B') ? 0 : text.indexOf('\nB') === -1 ? text.length : text.indexOf('\nB') + 1;
+  const head = text.slice(0, headEnd);
+  const tail = text.slice(headEnd);
+
+  const strippedHead = head
     .split('\n')
     .map((line) => {
       // Preserve a trailing CR (IGC files are CRLF) so rejoining is byte-exact.
@@ -59,6 +55,8 @@ export function stripIdentifyingHeaders(text: string): string {
       return stripped + cr;
     })
     .join('\n');
+
+  return strippedHead + tail;
 }
 
 /** Minimum number of valid GPS fixes for a file to count as a real flight. */
