@@ -94,7 +94,8 @@
 <h3 class="mt-8 mb-3 text-base font-semibold">Example</h3>
 
 <pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
-    class="font-mono text-sm whitespace-pre">curl --data-binary @flight.igc {`${origin}/flights`}</code
+    class="font-mono text-sm whitespace-pre"
+    >curl --data-binary @flight.igc -H "Content-Type: application/octet-stream" {`${origin}/flights`}</code
   ></pre>
 
 <h3 class="mt-8 mb-3 text-base font-semibold">Responses</h3>

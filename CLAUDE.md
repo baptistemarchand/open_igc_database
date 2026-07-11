@@ -56,6 +56,10 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
   `SORT_COLUMNS` (never interpolate a raw sort param); filters use bound `?` params.
 - `src/routes/flights/+server.ts` — public JSON API: `GET` lists all flights,
   `POST` ingests one `.igc` from the request body (`?anonymous=1`), no auth.
+  **Gotcha**: `POST` must send a non-form `Content-Type` (e.g.
+  `application/octet-stream`). curl's `--data-binary` default is
+  `application/x-www-form-urlencoded`, which SvelteKit's CSRF guard rejects with
+  "Cross-site POST form submissions are forbidden".
 - `src/routes/f/[id]/+server.ts` — dev/fallback file streamer; in prod downloads go
   straight to `R2_PUBLIC_URL` (set in `wrangler.toml [vars]`) so traffic skips the Worker.
 - Download URL logic (R2 public domain vs. `/f/[id]` fallback) is duplicated in

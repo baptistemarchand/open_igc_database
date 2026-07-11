@@ -51,6 +51,19 @@ export function stripIdentifyingHeaders(text: string): string {
 const MIN_VALID_FIXES = 5;
 
 /**
+ * True only for a real calendar date in strict 'YYYY-MM-DD' form. Guards against
+ * strings that match the shape but aren't real dates, e.g. '2000-00-00' — which
+ * igc-parser passes through verbatim from an HFDTE000000 header.
+ */
+function isRealDate(iso: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return false;
+  const [, y, mo, d] = m;
+  const dt = new Date(`${iso}T00:00:00Z`);
+  return dt.getUTCFullYear() === Number(y) && dt.getUTCMonth() + 1 === Number(mo) && dt.getUTCDate() === Number(d);
+}
+
+/**
  * Parse an IGC file (server-side only) and extract the searchable/displayable metadata.
  * Returns { ok: false, error } for anything that isn't a usable flight track so the
  * upload handler can reject junk without throwing.
@@ -72,11 +85,18 @@ export function extractMetadata(text: string): ExtractResult {
   const last = valid[valid.length - 1];
 
   // flight_date: prefer HFDTE (parsed.date, ISO). Fall back to the first fix's UTC day.
+  // A regex isn't enough: igc-parser passes through junk like "2000-00-00" (from
+  // HFDTE000000 on devices whose date was never set), which also makes every fix
+  // timestamp NaN — hence the finite-timestamp guard below. Such files have no
+  // recoverable date, so they're rejected rather than stored with a bogus one.
   const flight_date = (parsed.date ?? first.time).slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(flight_date)) {
+  if (!isRealDate(flight_date)) {
     return { ok: false, error: 'Missing or invalid flight date.' };
   }
 
+  if (!Number.isFinite(first.timestamp) || !Number.isFinite(last.timestamp)) {
+    return { ok: false, error: 'Invalid or missing timestamps in track fixes.' };
+  }
   const duration_s = Math.max(0, Math.round((last.timestamp - first.timestamp) / 1000));
 
   let max_altitude: number | null = null;
