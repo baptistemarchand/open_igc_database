@@ -16,6 +16,37 @@ export interface FlightMetadata {
 
 export type ExtractResult = { ok: true; meta: FlightMetadata } | { ok: false; error: string };
 
+/**
+ * IGC H-record types that carry personally identifying info. Matched on the
+ * 3-char header code at `line.slice(2, 5)` — the same slice `igc-parser` uses to
+ * dispatch headers. Covers pilot-in-charge, second crew/copilot, glider
+ * registration, and competition callsign. Glider *type* (GTY) is intentionally
+ * left alone: it isn't personally identifying and is useful for search.
+ */
+const IDENTIFYING_HEADERS = new Set(['PLT', 'CM2', 'GID', 'CID']);
+
+/**
+ * Remove identifying header values from raw IGC text while keeping the file
+ * structurally valid: the record key is preserved and only its value is blanked
+ * (`HFPLTPILOTINCHARGE:John Doe` → `HFPLTPILOTINCHARGE:`). Line endings are
+ * preserved byte-for-byte, so only the targeted lines change. Used both to build
+ * the anonymized file that gets stored and to compute a name-independent id.
+ */
+export function stripIdentifyingHeaders(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      // Preserve a trailing CR (IGC files are CRLF) so rejoining is byte-exact.
+      const cr = line.endsWith('\r') ? '\r' : '';
+      const body = cr ? line.slice(0, -1) : line;
+      if (body[0] !== 'H' || !IDENTIFYING_HEADERS.has(body.slice(2, 5))) return line;
+      const colon = body.indexOf(':');
+      const stripped = colon === -1 ? body.slice(0, 5) : body.slice(0, colon + 1);
+      return stripped + cr;
+    })
+    .join('\n');
+}
+
 /** Minimum number of valid GPS fixes for a file to count as a real flight. */
 const MIN_VALID_FIXES = 5;
 

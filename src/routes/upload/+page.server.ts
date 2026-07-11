@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
-import { insertFlight } from '$lib/db';
-import { extractMetadata } from '$lib/igc';
+import { getFlight, upsertFlight } from '$lib/db';
+import { extractMetadata, stripIdentifyingHeaders } from '$lib/igc';
 import type { Actions, PageServerLoad } from './$types';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — IGC files are small
@@ -57,6 +57,10 @@ export const actions: Actions = {
     if (files.length === 0) return fail(400, { error: 'No files selected.' });
     if (files.length > MAX_FILES) return fail(400, { error: `Too many files (max ${MAX_FILES}).` });
 
+    // Applies to every file in this submission: strip identifying details and
+    // list the pilot as "Anonymous".
+    const anonymous = form.get('anonymous') != null;
+
     const now = Math.floor(Date.now() / 1000);
     const results: FileResult[] = [];
 
@@ -70,8 +74,8 @@ export const actions: Actions = {
           });
           continue;
         }
-        const buf = await file.arrayBuffer();
-        const text = new TextDecoder().decode(buf);
+        const original = await file.arrayBuffer();
+        const text = new TextDecoder().decode(original);
 
         const parsed = extractMetadata(text);
         if (!parsed.ok) {
@@ -83,19 +87,26 @@ export const actions: Actions = {
           continue;
         }
 
-        const id = await sha256Hex(buf);
-        await BUCKET.put(`${id}.igc`, buf, {
+        // The id ignores identifying header fields, so the same track dedups to
+        // one flight whether or not it was uploaded anonymously.
+        const scrubbed = new TextEncoder().encode(stripIdentifyingHeaders(text)).buffer;
+        const id = await sha256Hex(scrubbed);
+        const storeBuf = anonymous ? scrubbed : original;
+
+        await BUCKET.put(`${id}.igc`, storeBuf, {
           httpMetadata: { contentType: 'text/plain; charset=utf-8' },
         });
-        const added = await insertFlight(DB, {
+        const existed = (await getFlight(DB, id)) != null;
+        await upsertFlight(DB, {
           id,
           ...parsed.meta,
-          size_bytes: file.size,
+          pilot_name: anonymous ? 'Anonymous' : parsed.meta.pilot_name,
+          size_bytes: storeBuf.byteLength,
           uploaded_at: now,
         });
         results.push({
           name: file.name,
-          status: added ? 'added' : 'duplicate',
+          status: existed ? 'duplicate' : 'added',
           id,
         });
       } catch (e) {

@@ -9,17 +9,31 @@ export interface Flight extends FlightMetadata {
 }
 
 /**
- * Insert a flight. Idempotent: a re-uploaded file (same id) is a no-op.
- * Returns true if a new row was written, false if it already existed (dedup).
+ * Insert or refresh a flight. The id is a name-independent content hash, so a
+ * conflicting id means "same flight, newer upload" — the row is overwritten
+ * (latest-upload-wins), which lets an anonymous re-upload relabel a named flight
+ * and vice versa. Whether the row is new is determined by the caller.
  */
-export async function insertFlight(db: D1Database, f: Flight): Promise<boolean> {
-  const res = await db
+export async function upsertFlight(db: D1Database, f: Flight): Promise<void> {
+  await db
     .prepare(
       `INSERT INTO flights
          (id, flight_date, pilot_name, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
           duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO NOTHING`,
+       ON CONFLICT(id) DO UPDATE SET
+         flight_date = excluded.flight_date,
+         pilot_name = excluded.pilot_name,
+         takeoff_lat = excluded.takeoff_lat,
+         takeoff_lon = excluded.takeoff_lon,
+         landing_lat = excluded.landing_lat,
+         landing_lon = excluded.landing_lon,
+         duration_s = excluded.duration_s,
+         max_altitude = excluded.max_altitude,
+         point_count = excluded.point_count,
+         glider_type = excluded.glider_type,
+         size_bytes = excluded.size_bytes,
+         uploaded_at = excluded.uploaded_at`,
     )
     .bind(
       f.id,
@@ -37,7 +51,6 @@ export async function insertFlight(db: D1Database, f: Flight): Promise<boolean> 
       f.uploaded_at,
     )
     .run();
-  return (res.meta.changes ?? 0) > 0;
 }
 
 export async function getFlight(db: D1Database, id: string): Promise<Flight | null> {

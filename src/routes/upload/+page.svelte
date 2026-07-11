@@ -50,13 +50,21 @@
   {/if}
 
   <label class="flex items-start gap-2 text-sm text-gray-600">
+    <input type="checkbox" name="anonymous" class="mt-0.5" />
+    <span>
+      Upload anonymously — remove the pilot and other identifying details from the file, and list it as
+      &ldquo;Anonymous&rdquo;.
+    </span>
+  </label>
+
+  <label class="flex items-start gap-2 text-sm text-gray-600">
     <input type="checkbox" required class="mt-0.5" />
     <span>
       I have the right to share these flights, and agree to release them into the public domain (<a
         href="https://creativecommons.org/publicdomain/zero/1.0/"
         target="_blank"
         rel="noreferrer">CC0</a
-      >).
+      >).<span class="text-red-500 ml-1">*</span>
     </span>
   </label>
 
