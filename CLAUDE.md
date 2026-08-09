@@ -50,6 +50,17 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
 - **Uploads are rejected** for: >5 MB, unparseable, <5 valid fixes, bad date, or
   out-of-range coords. `ingestIgc`/`extractMetadata` never throw on bad input — they
   return `{ ok: false, error }`.
+- **R2 holds gzip only, never raw IGC bytes.** `ingestIgc` gzips (`CompressionStream`,
+  native to `workerd`/Node, no dependency) after validation/hashing and sets
+  `httpMetadata.contentEncoding: 'gzip'` on the `BUCKET.put`. `size_bytes` is still the
+  _uncompressed_ logical file size, captured before gzip. Reads rely on that metadata:
+  the R2-public-URL path serves it automatically, and `src/routes/f/[id]/+server.ts`
+  hardcodes the same `Content-Encoding: gzip` header since every object is gzip. Fetch
+  and browsers decode this transparently; `curl`/`wget` need `--compressed` or the
+  downloaded `.igc` is raw gzip bytes. `scripts/import-igc.ts` mirrors this: its local
+  `.igc` files are themselves pre-gzipped, so it gunzips only in-memory to parse/hash,
+  and re-gzips only for anonymous imports (where stripping headers changes the bytes);
+  named imports upload the source gzip bytes unmodified.
 
 ## Where things are
 

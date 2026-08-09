@@ -47,10 +47,24 @@
       <tr><td><code>glider_type</code></td><td>string | null</td><td>Glider model from the IGC header</td></tr>
       <tr><td><code>size_bytes</code></td><td>number</td><td>Size of the IGC file in bytes</td></tr>
       <tr><td><code>uploaded_at</code></td><td>number</td><td>Upload time, epoch seconds</td></tr>
-      <tr><td><code>url</code></td><td>string</td><td>Direct link to the raw <code>.igc</code> file</td></tr>
+      <tr
+        ><td><code>url</code></td><td>string</td><td>Direct link to the <code>.igc</code> file (see note below)</td></tr
+      >
     </tbody>
   </table>
 </div>
+
+<p class="my-4 leading-relaxed">
+  The file behind <code class="font-mono">url</code> is stored and served gzip-compressed (<code class="font-mono"
+    >Content-Encoding: gzip</code
+  >). Browsers and <code class="font-mono">fetch</code>
+  decode this automatically; with <code class="font-mono">curl</code> or <code class="font-mono">wget</code>
+  add <code class="font-mono">--compressed</code> or you'll get the raw gzip bytes:
+</p>
+
+<pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
+    class="font-mono text-sm whitespace-pre">curl --compressed -o flight.igc "https://…/a1b2c3….igc"</code
+  ></pre>
 
 <h3 class="mt-8 mb-3 text-base font-semibold">Sample response</h3>
 

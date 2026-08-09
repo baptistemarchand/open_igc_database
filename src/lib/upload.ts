@@ -10,6 +10,17 @@ export async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Gzip-compress bytes via the runtime's native CompressionStream (supported by both
+ * `workerd` — Miniflare local dev and production — and Node, no dependency needed).
+ * R2 stores gzip only, never raw IGC bytes; see the `contentEncoding` set in the
+ * `BUCKET.put` below.
+ */
+async function gzip(buf: ArrayBuffer): Promise<ArrayBuffer> {
+  const stream = new Blob([buf]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Response(stream).arrayBuffer();
+}
+
 /** The storage bindings a single ingest needs. */
 export interface IngestEnv {
   DB: D1Database;
@@ -50,8 +61,10 @@ export async function ingestIgc(env: IngestEnv, buf: ArrayBuffer, opts: IngestOp
   const id = await sha256Hex(scrubbed);
   const storeBuf = opts.anonymous ? scrubbed : buf;
 
-  await env.BUCKET.put(`${id}.igc`, storeBuf, {
-    httpMetadata: { contentType: 'text/plain; charset=utf-8' },
+  // size_bytes reflects the logical (uncompressed) IGC file, so it's captured from
+  // storeBuf before gzip — R2 itself holds only the compressed bytes.
+  await env.BUCKET.put(`${id}.igc`, await gzip(storeBuf), {
+    httpMetadata: { contentType: 'text/plain; charset=utf-8', contentEncoding: 'gzip' },
   });
 
   const existed = (await getFlight(env.DB, id)) != null;

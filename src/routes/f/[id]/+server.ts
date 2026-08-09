@@ -18,6 +18,7 @@ export const GET: RequestHandler = async ({ params, platform }) => {
   return new Response(obj.body as unknown as BodyInit, {
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Encoding': 'gzip', // R2 holds gzip only — see src/lib/upload.ts
       'Content-Disposition': `attachment; filename="${params.id}.igc"`,
       'Cache-Control': 'public, max-age=31536000, immutable',
     },

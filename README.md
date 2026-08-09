@@ -14,9 +14,11 @@ Three pages:
 Serverless on Cloudflare, one SvelteKit app:
 
 - **SvelteKit** (`@sveltejs/adapter-cloudflare`) serves the pages and handles upload.
-- **R2** stores the raw `.igc` files (object key = SHA-256 of the bytes → free dedup).
-  Downloads are served straight from R2's public domain in production (zero egress, no
-  Worker cost); in dev they fall back to the `/f/[id]` route which streams from the binding.
+- **R2** stores the `.igc` files gzip-compressed (object key = SHA-256 of the bytes →
+  free dedup), served with `Content-Encoding: gzip` so browsers/`fetch` decode
+  transparently (`curl`/`wget` need `--compressed`). Downloads are served straight from
+  R2's public domain in production (zero egress, no Worker cost); in dev they fall back
+  to the `/f/[id]` route which streams from the binding.
 - **D1** (SQLite) stores only lightweight flight metadata for search — never track points.
 - IGC files are parsed once, **server-side at upload** (`igc-parser`), to extract metadata.
   There is no client-side parsing, no maps, and no charts.
