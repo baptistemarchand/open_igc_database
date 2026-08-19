@@ -24,17 +24,12 @@
  *   CLOUDFLARE_API_TOKEN   token with D1:Edit + Workers R2 Storage:Edit
  *   CLOUDFLARE_ACCOUNT_ID  your account id
  */
-import { readFile, readdir } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { extractMetadata, stripIdentifyingHeaders, type FlightMetadata } from '../src/lib/igc.ts';
+import { D1_DATABASE_ID, R2_BUCKET, loadEnvFile, d1Query, r2PutGzip, runPool, type Creds } from './lib/cf-api.ts';
+import { sha256Hex, findIgcFiles } from './lib/local-igc.ts';
 
-// --- Prod resource ids (from wrangler.toml) ------------------------------------
-const D1_DATABASE_ID = '0b6f991e-6fb8-4fbc-90fb-600aa020f175';
-const R2_BUCKET = 'open-igc';
-const API_BASE = 'https://api.cloudflare.com/client/v4';
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // keep in sync with src/lib/upload.ts
 
 // --- Types ---------------------------------------------------------------------
@@ -80,105 +75,7 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-// --- Credentials ---------------------------------------------------------------
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-
-/** Load KEY=VALUE lines from scripts/import.env into process.env (without overriding). */
-async function loadEnvFile(): Promise<void> {
-  let text: string;
-  try {
-    text = await readFile(join(SCRIPT_DIR, 'import.env'), 'utf8');
-  } catch {
-    return; // optional file
-  }
-  for (const raw of text.split('\n')) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const eq = line.indexOf('=');
-    if (eq === -1) continue;
-    const key = line.slice(0, eq).trim();
-    let val = line.slice(eq + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
-    }
-    if (!(key in process.env)) process.env[key] = val;
-  }
-}
-
-// --- Cloudflare REST helpers ---------------------------------------------------
-interface Creds {
-  token: string;
-  accountId: string;
-}
-
-/** fetch with retry/backoff on network errors, 429 and 5xx. */
-async function fetchRetry(url: string, init: RequestInit, retries = 5): Promise<Response> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(url, init);
-      if (res.status !== 429 && res.status < 500) return res;
-      lastErr = new Error(`HTTP ${res.status}`);
-    } catch (e) {
-      lastErr = e;
-    }
-    if (attempt < retries) await sleep(Math.min(500 * 2 ** attempt, 8000));
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Run a D1 SQL statement via the REST query API. Returns the first statement's rows. */
-async function d1Query<T = unknown>(creds: Creds, sql: string, params: unknown[] = []): Promise<T[]> {
-  const url = `${API_BASE}/accounts/${creds.accountId}/d1/database/${D1_DATABASE_ID}/query`;
-  const res = await fetchRetry(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${creds.token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ sql, params }),
-  });
-  const json: any = await res.json().catch(() => ({}));
-  if (!res.ok || !json?.success) {
-    const detail = json?.errors?.map((e: any) => e.message).join('; ') || `HTTP ${res.status}`;
-    throw new Error(`D1 query failed: ${detail}`);
-  }
-  return (json.result?.[0]?.results ?? []) as T[];
-}
-
-/** PUT a gzip-compressed object into R2 via the REST object API. R2 holds gzip only. */
-async function r2Put(creds: Creds, key: string, body: ArrayBuffer): Promise<void> {
-  const url = `${API_BASE}/accounts/${creds.accountId}/r2/buckets/${R2_BUCKET}/objects/${key}`;
-  const res = await fetchRetry(url, {
-    method: 'PUT',
-    headers: {
-      authorization: `Bearer ${creds.token}`,
-      'content-type': 'text/plain; charset=utf-8',
-      'content-encoding': 'gzip',
-    },
-    body,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`R2 put ${key} failed: HTTP ${res.status} ${text.slice(0, 200)}`);
-  }
-}
-
 // --- Ingest (mirror of src/lib/upload.ts, minus the bindings) ------------------
-/**
- * Hex SHA-256 of the given bytes — the flight id and R2 key. The Worker uses
- * `crypto.subtle`; node:crypto over the same UTF-8 bytes yields the identical hex.
- */
-function sha256Hex(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
-
-/** Copy a (possibly view-backed) Uint8Array into a standalone ArrayBuffer for a fetch body. */
-function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
-  const ab = new ArrayBuffer(u8.byteLength);
-  new Uint8Array(ab).set(u8);
-  return ab;
-}
-
 const UPSERT_SQL = `INSERT INTO flights
     (id, flight_date, pilot_name, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
      duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at)
@@ -213,44 +110,6 @@ const upsertParams = (f: Flight): unknown[] => [
   f.uploaded_at,
 ];
 
-// --- File discovery ------------------------------------------------------------
-async function findIgcFiles(dir: string, recursive: boolean): Promise<string[]> {
-  const out: string[] = [];
-  const walk = async (d: string) => {
-    const entries = await readdir(d, { withFileTypes: true });
-    for (const e of entries) {
-      const p = join(d, e.name);
-      if (e.isDirectory()) {
-        if (recursive) await walk(p);
-      } else if (e.isFile() && e.name.toLowerCase().endsWith('.igc')) {
-        out.push(p);
-      }
-    }
-  };
-  await walk(dir);
-  out.sort();
-  return out;
-}
-
-// --- Concurrency pool ----------------------------------------------------------
-async function runPool<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-  let next = 0;
-  const n = Math.min(concurrency, items.length);
-  await Promise.all(
-    Array.from({ length: n }, async () => {
-      while (true) {
-        const i = next++;
-        if (i >= items.length) return;
-        await worker(items[i], i);
-      }
-    }),
-  );
-}
-
 // --- Main ----------------------------------------------------------------------
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -279,7 +138,7 @@ async function main() {
   const known = new Set<string>();
   if (token && accountId) {
     console.log('Fetching existing flight ids from prod D1…');
-    const rows = await d1Query<{ id: string }>(creds, 'SELECT id FROM flights');
+    const rows = await d1Query<{ id: string }>(creds, D1_DATABASE_ID, 'SELECT id FROM flights');
     for (const r of rows) known.add(r.id);
     console.log(`  ${known.size} flight(s) already in the database.`);
   } else {
@@ -331,8 +190,8 @@ async function main() {
       };
 
       if (!args.dryRun) {
-        await r2Put(creds, `${id}.igc`, toArrayBuffer(storeBuf));
-        await d1Query(creds, UPSERT_SQL, upsertParams(flight));
+        await r2PutGzip(creds, R2_BUCKET, `${id}.igc`, storeBuf);
+        await d1Query(creds, D1_DATABASE_ID, UPSERT_SQL, upsertParams(flight));
       }
       tally.added++;
     } catch (e) {

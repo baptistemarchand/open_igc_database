@@ -22,3 +22,4 @@ scripts/import.env
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+backfill-gzip-full-run.log
