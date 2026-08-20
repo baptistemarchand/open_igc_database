@@ -21,4 +21,4 @@ bucket_name = "open-igc"
 # route which streams from the bucket binding). In production set it to the bucket's
 # public custom domain, e.g. "https://files.example.org", so downloads link straight to R2.
 [vars]
-R2_PUBLIC_URL = "https://pub-59f42d06fcf74dc38e73dee0bd01c99b.r2.dev"
+R2_PUBLIC_URL = "https://igc-files.baptiste.app"
