@@ -33,7 +33,11 @@
       </tr>
     </thead>
     <tbody class="[&_td]:border-b [&_td]:border-gray-100 [&_td]:px-2.5 [&_td]:py-1.5">
-      <tr><td><code>limit</code></td><td><code>1000</code></td><td>Max flights to return (capped at 1000)</td></tr>
+      <tr
+        ><td><code>limit</code></td><td><code>1000</code></td><td
+          >Flights to return, <code>1</code>–<code>1000</code></td
+        ></tr
+      >
       <tr><td><code>offset</code></td><td><code>0</code></td><td>Number of flights to skip</td></tr>
     </tbody>
   </table>

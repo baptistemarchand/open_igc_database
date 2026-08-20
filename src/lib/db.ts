@@ -66,27 +66,25 @@ export interface FlightsPage {
 
 /** Bulk-API page size: intentionally separate from searchFlights's 100-max (sized for
  *  the /browse UI) — this is a different clamp for a different consumer, don't unify. */
-const MAX_FLIGHTS_PAGE_SIZE = 1000;
+export const MAX_FLIGHTS_PAGE_SIZE = 1000;
+export const DEFAULT_FLIGHTS_PAGE_SIZE = MAX_FLIGHTS_PAGE_SIZE;
 
 /**
  * Return one page of flights, newest first, for the public JSON API.
- * `limit` defaults to and caps at 1000; `offset` defaults to 0. Both are clamped
- * rather than rejected — see the GET /flights handler for param parsing.
+ *
+ * Expects `limit` and `offset` already validated and in range — callers parse them
+ * with `intParam` from `$lib/params`, which rejects malformed or out-of-range input
+ * with a 400 before it reaches here, so this just echoes them back with the rows.
  */
 export async function getFlightsPage(db: D1Database, limit: number, offset: number): Promise<FlightsPage> {
-  const safeLimit = Number.isFinite(limit)
-    ? Math.min(Math.max(Math.trunc(limit), 1), MAX_FLIGHTS_PAGE_SIZE)
-    : MAX_FLIGHTS_PAGE_SIZE;
-  const safeOffset = Number.isFinite(offset) && offset >= 0 ? Math.trunc(offset) : 0;
-
   const totalRow = await db.prepare('SELECT COUNT(*) AS n FROM flights').first<{ n: number }>();
 
   const { results } = await db
     .prepare('SELECT * FROM flights ORDER BY flight_date DESC, id ASC LIMIT ? OFFSET ?')
-    .bind(safeLimit, safeOffset)
+    .bind(limit, offset)
     .all<Flight>();
 
-  return { flights: results ?? [], total: totalRow?.n ?? 0, limit: safeLimit, offset: safeOffset };
+  return { flights: results ?? [], total: totalRow?.n ?? 0, limit, offset };
 }
 
 /** Whitelisted sort keys → column, guarding against injection via the sort param. */

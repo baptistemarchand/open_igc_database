@@ -1,5 +1,6 @@
 import { error, json } from '@sveltejs/kit';
-import { getFlightsPage, type Flight } from '$lib/db';
+import { DEFAULT_FLIGHTS_PAGE_SIZE, MAX_FLIGHTS_PAGE_SIZE, getFlightsPage, type Flight } from '$lib/db';
+import { intParam } from '$lib/params';
 import { ingestIgc } from '$lib/upload';
 import type { RequestHandler } from './$types';
 
@@ -12,11 +13,11 @@ function fileUrl(f: Flight, env: App.Platform['env'], origin: string): string {
 /**
  * Public JSON API: returns one page of flights, newest first.
  *
- * `limit` (default & max 1000) and `offset` (default 0) are read from the query
- * string and clamped rather than rejected on bad input. Each item is the full D1
- * row plus a `url` field pointing at the raw .igc file. In production that is the
- * R2 public domain (R2_PUBLIC_URL); in dev/fallback it is an absolute link to this
- * app's own /f/<id> streaming route.
+ * `limit` (default & max 1000) and `offset` (default 0) come from the query string
+ * via `intParam`, which 400s on malformed or out-of-range values instead of
+ * clamping them. Each item is the full D1 row plus a `url` field pointing at the
+ * raw .igc file. In production that is the R2 public domain (R2_PUBLIC_URL); in
+ * dev/fallback it is an absolute link to this app's own /f/<id> streaming route.
  *
  * The response also carries `total` and a `next` field: a ready-to-fetch absolute
  * URL for the following page, or `null` once there's nothing left. `next` is set
@@ -30,8 +31,12 @@ export const GET: RequestHandler = async ({ platform, url }) => {
   if (!platform?.env) throw error(503, 'Storage unavailable');
 
   const env = platform.env;
-  const limit = Number(url.searchParams.get('limit'));
-  const offset = Number(url.searchParams.get('offset'));
+  const limit = intParam(url.searchParams, 'limit', {
+    default: DEFAULT_FLIGHTS_PAGE_SIZE,
+    min: 1,
+    max: MAX_FLIGHTS_PAGE_SIZE,
+  });
+  const offset = intParam(url.searchParams, 'offset', { default: 0, min: 0, max: Number.MAX_SAFE_INTEGER });
   const page = await getFlightsPage(env.DB, limit, offset);
 
   const flights = page.flights.map((f) => ({

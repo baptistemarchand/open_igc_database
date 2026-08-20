@@ -73,6 +73,16 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
 - `src/lib/igc.ts` — parse/validate/extract + `stripIdentifyingHeaders`.
 - `src/lib/db.ts` — all D1 queries. `searchFlights` sort is whitelisted via
   `SORT_COLUMNS` (never interpolate a raw sort param); filters use bound `?` params.
+  `getFlightsPage` expects `limit`/`offset` already bounded by the caller.
+- `src/lib/params.ts` — `intParam`, the one place integer query params get validated.
+  Absent → the supplied default; anything else must match `/^\d+$/` and sit within
+  `[min, max]` or it throws `error(400, …)`. Note this is the opposite policy from
+  `searchFlights`/`browse`, which coerce-and-clamp: the public API rejects so callers
+  learn the cap exists, while the UI never 400s on its own links. Use `intParam`
+  rather than hand-rolling — `searchParams.get()` returns `null` for a missing param
+  and `Number(null)`/`Number('')` are both `0`, so a bare coercion turns "not
+  specified" into zero. That shipped as a bug once (`/flights` served one flight
+  instead of 1000).
 - `src/routes/flights/+server.ts` — public JSON API: `GET` returns one page of
   flights (default & max 1000 via `limit`, `offset` to skip ahead), with a `next`
   URL in the response for iterating the full dataset; `POST` ingests one `.igc`
