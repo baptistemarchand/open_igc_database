@@ -57,8 +57,40 @@ export async function getFlight(db: D1Database, id: string): Promise<Flight | nu
   return db.prepare('SELECT * FROM flights WHERE id = ?').bind(id).first<Flight>();
 }
 
+/**
+ * Real D1 columns, in schema order.
+ *
+ * Doubles as the whitelist backing the API's `fields` param: the only strings ever
+ * interpolated into `getFlightsPage`'s SELECT list come from here, never from a
+ * request — same argument as `SORT_COLUMNS` below. `satisfies` plus the
+ * `_AllColumnsListed` check keep it in sync with `Flight`, so adding a column to the
+ * interface fails the typecheck until it's listed here too.
+ */
+export const FLIGHT_COLUMNS = [
+  'id',
+  'flight_date',
+  'pilot_name',
+  'takeoff_lat',
+  'takeoff_lon',
+  'landing_lat',
+  'landing_lon',
+  'duration_s',
+  'max_altitude',
+  'point_count',
+  'glider_type',
+  'size_bytes',
+  'uploaded_at',
+] as const satisfies readonly (keyof Flight)[];
+
+export type FlightColumn = (typeof FLIGHT_COLUMNS)[number];
+
+/** Compile-time assertion: `Assert<false>` violates the constraint and is a type error. */
+type Assert<T extends true> = T;
+type _AllColumnsListed = Assert<Exclude<keyof Flight, FlightColumn> extends never ? true : false>;
+
 export interface FlightsPage {
-  flights: Flight[];
+  /** Only the columns the caller asked for are present — see `getFlightsPage`. */
+  flights: Partial<Flight>[];
   total: number;
   limit: number;
   offset: number;
@@ -75,14 +107,26 @@ export const DEFAULT_FLIGHTS_PAGE_SIZE = MAX_FLIGHTS_PAGE_SIZE;
  * Expects `limit` and `offset` already validated and in range — callers parse them
  * with `intParam` from `$lib/params`, which rejects malformed or out-of-range input
  * with a 400 before it reaches here, so this just echoes them back with the rows.
+ *
+ * `columns` is projected into the SELECT list rather than `SELECT *`: the API defaults
+ * to returning a download URL only, so most requests read one column instead of
+ * thirteen. Interpolating the names is safe because they can only come from
+ * `FLIGHT_COLUMNS` (`FlightColumn` has no other inhabitants), never from a request.
  */
-export async function getFlightsPage(db: D1Database, limit: number, offset: number): Promise<FlightsPage> {
+export async function getFlightsPage(
+  db: D1Database,
+  limit: number,
+  offset: number,
+  columns: readonly FlightColumn[],
+): Promise<FlightsPage> {
+  if (columns.length === 0) throw new Error('getFlightsPage: columns must not be empty');
+
   const totalRow = await db.prepare('SELECT COUNT(*) AS n FROM flights').first<{ n: number }>();
 
   const { results } = await db
-    .prepare('SELECT * FROM flights ORDER BY flight_date DESC, id ASC LIMIT ? OFFSET ?')
+    .prepare(`SELECT ${columns.join(', ')} FROM flights ORDER BY flight_date DESC, id ASC LIMIT ? OFFSET ?`)
     .bind(limit, offset)
-    .all<Flight>();
+    .all<Partial<Flight>>();
 
   return { flights: results ?? [], total: totalRow?.n ?? 0, limit, offset };
 }

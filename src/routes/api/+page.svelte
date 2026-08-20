@@ -23,6 +23,11 @@
   <code class="font-mono">null</code>, to iterate the whole dataset.
 </p>
 
+<p class="my-4 leading-relaxed">
+  By default each flight contains only <code class="font-mono">url</code>, a direct link to the
+  <code class="font-mono">.igc</code> file. Use <code class="font-mono">fields</code> to ask for more.
+</p>
+
 <h3 class="mt-8 mb-3 text-base font-semibold">Query parameters</h3>
 
 <div class="my-5 overflow-x-auto">
@@ -39,14 +44,41 @@
         ></tr
       >
       <tr><td><code>offset</code></td><td><code>0</code></td><td>Number of flights to skip</td></tr>
+      <tr><td><code>fields</code></td><td><code>url</code></td><td>Which flight fields to return (see below)</td></tr>
     </tbody>
   </table>
 </div>
 
-<h3 class="mt-8 mb-3 text-base font-semibold">Example</h3>
+<h3 class="mt-8 mb-3 text-base font-semibold">Choosing fields</h3>
+
+<p class="my-4 leading-relaxed">
+  <code class="font-mono">fields</code> takes a comma-separated list of the field names in the table below — for example
+  <code class="font-mono">fields=id,flight_date,url</code>. Pass
+  <code class="font-mono">fields=all</code> for every field. Only what you ask for is read from the database and sent
+  back, so requesting less is faster and cheaper for both of us. An unrecognised field name is an error (<code
+    class="font-mono">400</code
+  >) rather than being ignored, so typos don't silently return the wrong shape.
+</p>
+
+<p class="my-4 leading-relaxed">
+  Fields come back in the order listed in the table, whatever order you ask for them in, and
+  <code class="font-mono">fields</code> is carried over into the <code class="font-mono">next</code> URL — so paging keeps
+  your selection without you re-adding it.
+</p>
+
+<p class="my-4 leading-relaxed rounded-lg border border-amber-200 bg-amber-50 p-4">
+  <strong class="font-semibold">Changed:</strong> this endpoint used to return every field by default. If you have an
+  existing integration that reads anything other than <code class="font-mono">url</code>, add
+  <code class="font-mono">?fields=all</code> to restore the old response, or better, list just the fields you use.
+</p>
+
+<h3 class="mt-8 mb-3 text-base font-semibold">Examples</h3>
 
 <pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
-    class="font-mono text-sm whitespace-pre">curl {`${origin}/flights`}</code
+    class="font-mono text-sm whitespace-pre"
+    >curl {`${origin}/flights`}
+curl "{`${origin}/flights?fields=id,flight_date,duration_s,url`}"
+curl "{`${origin}/flights?fields=all&limit=10`}"</code
   ></pre>
 
 <h3 class="mt-8 mb-3 text-base font-semibold">Response fields</h3>
@@ -72,7 +104,10 @@
   </table>
 </div>
 
-<p class="my-4 leading-relaxed">Each object in <code class="font-mono">flights</code> has:</p>
+<p class="my-4 leading-relaxed">
+  Every name below is a valid <code class="font-mono">fields</code> value. Each object in
+  <code class="font-mono">flights</code> contains exactly the ones you selected:
+</p>
 
 <div class="my-5 overflow-x-auto">
   <table class="w-full rounded-lg border border-gray-200 text-sm [&_code]:font-mono [&_code]:text-[0.85em]">
@@ -96,7 +131,9 @@
       <tr><td><code>size_bytes</code></td><td>number</td><td>Size of the IGC file in bytes</td></tr>
       <tr><td><code>uploaded_at</code></td><td>number</td><td>Upload time, epoch seconds</td></tr>
       <tr
-        ><td><code>url</code></td><td>string</td><td>Direct link to the <code>.igc</code> file (see note below)</td></tr
+        ><td><code>url</code></td><td>string</td><td
+          >Direct link to the <code>.igc</code> file (the default; see note below)</td
+        ></tr
       >
     </tbody>
   </table>
@@ -116,10 +153,29 @@
 
 <h3 class="mt-8 mb-3 text-base font-semibold">Sample response</h3>
 
+<p class="my-4 leading-relaxed">Default (<code class="font-mono">GET /flights</code>):</p>
+
 <pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
     class="font-mono text-sm whitespace-pre"
     >{`{
   "flights": [
+    { "url": "https://…/a1b2c3….igc" },
+    { "url": "https://…/d4e5f6….igc" }
+  ],
+  "total": 4213,
+  "limit": 1000,
+  "offset": 0,
+  "next": "https://…/flights?limit=1000&offset=1000"
+}`}</code
+  ></pre>
+
+<p class="my-4 leading-relaxed">
+  With <code class="font-mono">?fields=all</code> (the <code class="font-mono">flights</code> array only, other fields unchanged):
+</p>
+
+<pre class="my-5 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-5"><code
+    class="font-mono text-sm whitespace-pre"
+    >{`  "flights": [
     {
       "id": "a1b2c3…",
       "flight_date": "2024-06-15",
@@ -136,12 +192,7 @@
       "uploaded_at": 1718460000,
       "url": "https://…/a1b2c3….igc"
     }
-  ],
-  "total": 4213,
-  "limit": 1000,
-  "offset": 0,
-  "next": "https://…/flights?limit=1000&offset=1000"
-}`}</code
+  ],`}</code
   ></pre>
 
 <h2 class="mt-16 mb-4 text-xl font-semibold">
@@ -184,9 +235,10 @@
 </div>
 
 <p class="my-4 leading-relaxed">
-  On success the response is a flight object (same fields as an item in the <code class="font-mono">flights</code>
-  array of <code class="font-mono">GET /flights</code> above) plus a <code class="font-mono">status</code> field of
-  <code class="font-mono">"added"</code> or <code class="font-mono">"duplicate"</code>.
+  On success the response is the full flight object — every field listed above, as with
+  <code class="font-mono">?fields=all</code> — plus a <code class="font-mono">status</code> field of
+  <code class="font-mono">"added"</code> or <code class="font-mono">"duplicate"</code>. There is no
+  <code class="font-mono">fields</code> param here; it's a single row, so it's always sent in full.
 </p>
 
 <h3 class="mt-8 mb-3 text-base font-semibold">Sample response</h3>

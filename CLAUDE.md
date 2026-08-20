@@ -74,9 +74,14 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
 - `src/lib/db.ts` — all D1 queries. `searchFlights` sort is whitelisted via
   `SORT_COLUMNS` (never interpolate a raw sort param); filters use bound `?` params.
   `getFlightsPage` expects `limit`/`offset` already bounded by the caller.
-- `src/lib/params.ts` — `intParam`, the one place integer query params get validated.
-  Absent → the supplied default; anything else must match `/^\d+$/` and sit within
-  `[min, max]` or it throws `error(400, …)`. Note this is the opposite policy from
+- `src/lib/params.ts` — `intParam` and `fieldsParam`, the one place query params get
+  validated. `intParam`: absent → the supplied default; anything else must match
+  `/^\d+$/` and sit within `[min, max]` or it throws `error(400, …)`. `fieldsParam`
+  parses a comma-separated list against a whitelist, same reject-don't-coerce policy:
+  an unknown name 400s (with the offender echoed, capped by `MAX_ECHO`) rather than
+  being dropped, so a typo can't silently yield a wrong-shaped response. It returns
+  results in _whitelist_ order, deduped — that's what makes response key order stable
+  and independent of the request. Note this is the opposite policy from
   `searchFlights`/`browse`, which coerce-and-clamp: the public API rejects so callers
   learn the cap exists, while the UI never 400s on its own links. Use `intParam`
   rather than hand-rolling — `searchParams.get()` returns `null` for a missing param
@@ -87,6 +92,21 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
   flights (default & max 1000 via `limit`, `offset` to skip ahead), with a `next`
   URL in the response for iterating the full dataset; `POST` ingests one `.igc`
   from the request body (`?anonymous=1`), no auth.
+  **`GET` is sparse by default**: each item carries only `url` unless `?fields=`
+  asks for more (`fields=all` for the whole row, else a comma-separated subset of
+  `FLIGHT_COLUMNS` + `url`). This is a deliberate cost decision — the free-tier
+  worker was reading and serialising 13 columns × 1000 rows for callers who only
+  wanted the download link (~4× the bytes). `getFlightsPage` projects the column
+  list into its SELECT instead of `SELECT *`; interpolating those names is safe
+  only because they come from `FLIGHT_COLUMNS`, same argument as `SORT_COLUMNS`.
+  Two things to keep straight: `url` is derived from `id`, so `id` is _fetched_
+  whenever `url` is wanted but _emitted_ only if actually requested (hence the
+  explicit key-picking loop — spreading the row would leak it); and `next` is a copy
+  of the request URL, so `fields` propagates across pages for free. `POST` is
+  exempt on purpose — one row, and `upload/+page.svelte` consumes the whole object.
+  `FLIGHT_COLUMNS` is guarded by a `satisfies` + an `Assert<…>` conditional-type
+  check against `keyof Flight`; the assert has to be _consumed_ to fire, since a
+  type alias that merely resolves to `never` is not an error.
   **Gotcha**: `POST` must send a non-form `Content-Type` (e.g.
   `application/octet-stream`). curl's `--data-binary` default is
   `application/x-www-form-urlencoded`, which SvelteKit's CSRF guard rejects with
