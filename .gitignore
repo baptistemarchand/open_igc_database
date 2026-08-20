@@ -23,5 +23,7 @@ scripts/import.env
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 backfill-gzip-full-run.log
+backfill-takeoff-run.log
 
 igc_gz
+.backfill-takeoff-cache.jsonl*

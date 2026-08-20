@@ -77,8 +77,23 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
     the only `ALTER TABLE` so far), unlike `pilot_name`/`glider_type`/`max_altitude`,
     which are nullable because the source file may lack them. Backfill is asymmetric:
     `takeoff_tz` can be filled from D1 alone (the coords are already stored), but
-    `takeoff_hour` needs a re-read and re-parse of every R2 object, since track points
-    aren't stored — `scripts/backfill-gzip.ts` is the pattern.
+    `takeoff_hour` needs a re-read and re-parse of the file, since track points aren't
+    stored. **Both columns are backfilled as of 2026-08-20** — 186,626/186,626 rows,
+    zero NULLs — by `scripts/backfill-takeoff-time.ts`, which is the pattern to copy for
+    any future column that needs file contents. Two things it establishes:
+    - **Read the corpus from disk, not R2.** The account API is paced at ~3.8 req/s
+      (`scripts/lib/cf-api.ts`), so a GET per flight is ~13.6 h; hashing the local
+      `igc_gz/` copy instead is ~4 min across a `worker_threads` pool, and only the 266
+      rows with no local match fall back to R2. Local filenames carry no id, so the
+      id is recomputed per file — do that from the _same_ gunzip that feeds
+      `extractMetadata`, rather than reusing `mapLocalIdsToPaths` (paths only, forces a
+      second read of all 15 GB).
+    - **Fold many rows into one statement.** `d1Exec` + `WITH v(id,…) AS (VALUES …)
+UPDATE … FROM v`, 500 rows per request: ~370 requests and ~100 s instead of 186k
+      requests. D1 caps bound params far below that, so values are inlined as literals
+      and therefore _validated_ against strict patterns (never escaped) — same argument
+      as `SORT_COLUMNS`/`FLIGHT_COLUMNS`. Resume is free: the target set is
+      `WHERE takeoff_tz IS NULL`, so an interrupted run just gets re-run.
 - **Uploads are rejected** for: >5 MB, unparseable, <5 valid fixes, bad date, or
   out-of-range coords. `ingestIgc`/`extractMetadata` never throw on bad input — they
   return `{ ok: false, error }`.

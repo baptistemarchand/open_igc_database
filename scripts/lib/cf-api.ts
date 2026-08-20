@@ -93,13 +93,20 @@ export async function fetchRetry(url: string, init: RequestInit, retries = 8): P
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-/** Run a D1 SQL statement via the REST query API. Returns the first statement's rows. */
-export async function d1Query<T = unknown>(
+export interface D1Meta {
+  changes?: number;
+  rows_read?: number;
+  rows_written?: number;
+  duration?: number;
+}
+
+/** POST one statement to the REST query API and return its `result[0]` envelope. */
+async function d1Request(
   creds: Creds,
   databaseId: string,
   sql: string,
-  params: unknown[] = [],
-): Promise<T[]> {
+  params: unknown[],
+): Promise<{ results?: unknown[]; meta?: D1Meta }> {
   const url = `${API_BASE}/accounts/${creds.accountId}/d1/database/${databaseId}/query`;
   const res = await fetchRetry(url, {
     method: 'POST',
@@ -111,7 +118,39 @@ export async function d1Query<T = unknown>(
     const detail = json?.errors?.map((e: any) => e.message).join('; ') || `HTTP ${res.status}`;
     throw new Error(`D1 query failed: ${detail}`);
   }
-  return (json.result?.[0]?.results ?? []) as T[];
+  return json.result?.[0] ?? {};
+}
+
+/** Run a D1 SQL statement via the REST query API. Returns the first statement's rows. */
+export async function d1Query<T = unknown>(
+  creds: Creds,
+  databaseId: string,
+  sql: string,
+  params: unknown[] = [],
+): Promise<T[]> {
+  const { results } = await d1Request(creds, databaseId, sql, params);
+  return (results ?? []) as T[];
+}
+
+/**
+ * Run one write statement that carries its own values inlined as SQL literals, and
+ * return D1's `meta` (changes / rows_written) for it.
+ *
+ * Why literals rather than `?` params: this exists for bulk writes that fold many rows
+ * into a single statement (`WITH v(...) AS (VALUES ...) UPDATE ... FROM v`), because
+ * the per-request rate gate above makes one-statement-per-row unworkable at corpus
+ * scale — 186k rows would take ~13.6 h. D1 caps bound parameters per query far below
+ * the thousands such a batch needs, so the values have to be inlined.
+ *
+ * That makes escaping the caller's problem, and the rule is validate-don't-escape:
+ * every interpolated value must first be checked against a strict pattern and dropped
+ * if it fails, never quoted-and-hoped. Same argument as `FLIGHT_COLUMNS` in
+ * src/lib/db.ts — safe only because the strings provably come from a constrained set.
+ * See scripts/backfill-takeoff-time.ts for the worked example.
+ */
+export async function d1Exec(creds: Creds, databaseId: string, sql: string): Promise<D1Meta> {
+  const { meta } = await d1Request(creds, databaseId, sql, []);
+  return meta ?? {};
 }
 
 export interface R2GetResult {

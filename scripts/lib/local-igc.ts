@@ -11,9 +11,15 @@ import { stripIdentifyingHeaders } from '../../src/lib/igc.ts';
 /**
  * Hex SHA-256 of the given bytes — the flight id and R2 key. The Worker uses
  * `crypto.subtle`; node:crypto over the same UTF-8 bytes yields the identical hex.
+ *
+ * A string is hashed as UTF-8, which is byte-identical to encoding it first but skips
+ * the copy — worth having when hashing a whole 186k-file corpus (see
+ * scripts/backfill-takeoff-time.ts).
  */
-export function sha256Hex(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex');
+export function sha256Hex(data: Uint8Array | string): string {
+  return typeof data === 'string'
+    ? createHash('sha256').update(data, 'utf8').digest('hex')
+    : createHash('sha256').update(data).digest('hex');
 }
 
 /** Matches both naming conventions seen in the wild: plain `*.igc` and `*.igc.gz`
