@@ -19,8 +19,9 @@ export async function upsertFlight(db: D1Database, f: Flight): Promise<void> {
     .prepare(
       `INSERT INTO flights
          (id, flight_date, pilot_name, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
-          duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at,
+          takeoff_hour, takeoff_tz)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          flight_date = excluded.flight_date,
          pilot_name = excluded.pilot_name,
@@ -33,7 +34,9 @@ export async function upsertFlight(db: D1Database, f: Flight): Promise<void> {
          point_count = excluded.point_count,
          glider_type = excluded.glider_type,
          size_bytes = excluded.size_bytes,
-         uploaded_at = excluded.uploaded_at`,
+         uploaded_at = excluded.uploaded_at,
+         takeoff_hour = excluded.takeoff_hour,
+         takeoff_tz = excluded.takeoff_tz`,
     )
     .bind(
       f.id,
@@ -49,6 +52,8 @@ export async function upsertFlight(db: D1Database, f: Flight): Promise<void> {
       f.glider_type,
       f.size_bytes,
       f.uploaded_at,
+      f.takeoff_hour,
+      f.takeoff_tz,
     )
     .run();
 }
@@ -80,6 +85,10 @@ export const FLIGHT_COLUMNS = [
   'glider_type',
   'size_bytes',
   'uploaded_at',
+  // Added by migration 0003. ALTER TABLE ADD COLUMN appends physically, so these belong
+  // last to keep this list in real schema order — not grouped with takeoff_lat/lon.
+  'takeoff_hour',
+  'takeoff_tz',
 ] as const satisfies readonly (keyof Flight)[];
 
 export type FlightColumn = (typeof FLIGHT_COLUMNS)[number];
@@ -110,7 +119,7 @@ export const DEFAULT_FLIGHTS_PAGE_SIZE = MAX_FLIGHTS_PAGE_SIZE;
  *
  * `columns` is projected into the SELECT list rather than `SELECT *`: the API defaults
  * to returning a download URL only, so most requests read one column instead of
- * thirteen. Interpolating the names is safe because they can only come from
+ * fifteen. Interpolating the names is safe because they can only come from
  * `FLIGHT_COLUMNS` (`FlightColumn` has no other inhabitants), never from a request.
  */
 export async function getFlightsPage(

@@ -33,7 +33,7 @@ const ALL_FIELDS = 'all';
  *
  * Each item carries only the fields named by `?fields=`, defaulting to `url` alone —
  * a link to the raw .igc file, which is all most consumers want and keeps the worker
- * off the hook for reading and serialising thirteen columns per row. Pass
+ * off the hook for reading and serialising fifteen columns per row. Pass
  * `fields=all` for the whole D1 row, or a comma-separated subset; unknown names 400
  * (see `fieldsParam`). `url` is the R2 public domain (R2_PUBLIC_URL) in production and
  * an absolute link to this app's own /f/<id> streaming route in dev/fallback.

@@ -47,6 +47,38 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
   (tiny inline parser in `flight/[id]/+page.svelte`), so the worker never re-parses on a
   read. Cross-origin fetches of `R2_PUBLIC_URL` therefore need a **CORS rule** on the
   bucket allowing the site origin (a plain `<a download>` doesn't, but `fetch()` does).
+- **`takeoff_hour` is _local_ civil time, not UTC** (0–23, hour of the first valid fix;
+  minutes are deliberately not stored). IGC B-records are UTC-only, so the zone is looked
+  up from `takeoff_lat/takeoff_lon` via **`tz-lookup`** and `Intl` supplies the
+  DST-correct offset for that date; the resolved zone is stored in `takeoff_tz` so the
+  hour stays auditable. Two things not to redo:
+  - **Don't switch to the file's own `HFTZN`/`HFTZO` header.** Measured over the 186k-file
+    corpus: ~89% of files have no TZ header, and of the ~10% that do, `igc-parser` only
+    reads `TZN` (never `TZO`), rejects the space-padded `HFTZNUTCOFFSET:  2` spelling,
+    and _silently parses `HPTZNUTCOFFSET:2:00` as `0`_. ~5% usable, ~1% actively wrong.
+  - **`tz-lookup` is a deliberate exception to the zero-dependency bias** (cf. the native
+    `CompressionStream`, the hand-rolled map parser): lat/lon → IANA zone is a data
+    problem, not a code problem. It's one self-contained 73 KB / 28 KB-gzipped CJS file,
+    no transitive deps, no filesystem, CC0. Its boundary data is from 2019, which is fine
+    — boundaries barely move, and the DST _rules_ come from the runtime's full-ICU `Intl`,
+    so offsets stay current without bumping the package. `geo-tz` is a non-starter (73 MB
+    of shapefiles read from a filesystem the Worker doesn't have). It ships no types;
+    `src/tz-lookup.d.ts` is the ambient declaration.
+  - Ordering in `extractMetadata` is load-bearing: the lookup sits **after** the
+    `Number.isFinite(timestamp)` and `inRange` coord guards, because `tzlookup` throws
+    `RangeError` on bad coords and a NaN timestamp would yield a bogus hour. Use
+    `hourCycle: 'h23'` rather than `hour12: false`: h23 pins the range to 0–23, while
+    `hour12: false` leaves the midnight rendering to the locale and ICU build.
+  - **Known wrinkle, don't "fix" it:** `flight_date` stays UTC while `takeoff_hour` is
+    local, so a late-evening flight east of UTC has a date and hour that disagree by a
+    day. Fixing that means a local-date column and re-deciding what `flight_date` means
+    for search and the `(flight_date, id)` pagination index — don't shift `flight_date`.
+  - **`takeoff_hour`/`takeoff_tz` are nullable _because of history_** (migration 0003 —
+    the only `ALTER TABLE` so far), unlike `pilot_name`/`glider_type`/`max_altitude`,
+    which are nullable because the source file may lack them. Backfill is asymmetric:
+    `takeoff_tz` can be filled from D1 alone (the coords are already stored), but
+    `takeoff_hour` needs a re-read and re-parse of every R2 object, since track points
+    aren't stored — `scripts/backfill-gzip.ts` is the pattern.
 - **Uploads are rejected** for: >5 MB, unparseable, <5 valid fixes, bad date, or
   out-of-range coords. `ingestIgc`/`extractMetadata` never throw on bad input — they
   return `{ ok: false, error }`.
@@ -95,7 +127,7 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
   **`GET` is sparse by default**: each item carries only `url` unless `?fields=`
   asks for more (`fields=all` for the whole row, else a comma-separated subset of
   `FLIGHT_COLUMNS` + `url`). This is a deliberate cost decision — the free-tier
-  worker was reading and serialising 13 columns × 1000 rows for callers who only
+  worker was reading and serialising 15 columns × 1000 rows for callers who only
   wanted the download link (~4× the bytes). `getFlightsPage` projects the column
   list into its SELECT instead of `SELECT *`; interpolating those names is safe
   only because they come from `FLIGHT_COLUMNS`, same argument as `SORT_COLUMNS`.

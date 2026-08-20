@@ -10,6 +10,11 @@ export function formatCoord(lat: number, lon: number): string {
   return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
 }
 
+/** Format a local hour of day (0-23) as e.g. "14h"; "—" when not recorded. */
+export function formatHour(h: number | null): string {
+  return h == null ? '—' : `${h}h`;
+}
+
 /** Format epoch seconds as a UTC date, e.g. "2026-07-09". */
 export function formatEpochDate(epoch: number): string {
   return new Date(epoch * 1000).toISOString().slice(0, 10);

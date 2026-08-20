@@ -1,9 +1,12 @@
 import IGCParser from 'igc-parser';
+import tzlookup from 'tz-lookup';
 
 /** Metadata extracted from an IGC file, ready to insert into D1 (minus id/size/uploaded_at). */
 export interface FlightMetadata {
   flight_date: string; // ISO 'YYYY-MM-DD'
   pilot_name: string | null;
+  takeoff_hour: number | null; // local hour of day at takeoff, 0-23
+  takeoff_tz: string | null; // IANA zone from the takeoff coords, e.g. 'Europe/Paris'
   takeoff_lat: number;
   takeoff_lon: number;
   landing_lat: number;
@@ -122,11 +125,33 @@ export function extractMetadata(text: string): ExtractResult {
     return { ok: false, error: 'Implausible coordinates.' };
   }
 
+  // Local time of day at takeoff. IGC B-records are UTC only, so the zone has to come
+  // from the takeoff coordinates — the file's own HFTZN/HFTZO header covers ~10% of
+  // real-world files and half of those are malformed (see CLAUDE.md). ICU (full in
+  // workerd) then supplies the DST-correct offset for that specific date.
+  //
+  // Both guards above are load-bearing: tzlookup throws RangeError on out-of-range
+  // coords, and a NaN timestamp would silently yield a bogus hour. Don't hoist this.
+  const takeoff_tz = tzlookup(first.latitude, first.longitude);
+  const hourPart = new Intl.DateTimeFormat('en-US', {
+    timeZone: takeoff_tz,
+    hour: '2-digit',
+    hourCycle: 'h23', // explicit 0-23; hour12:false leaves midnight up to the locale/ICU build
+  })
+    .formatToParts(new Date(first.timestamp))
+    .find((p) => p.type === 'hour')?.value;
+  // formatToParts (not format) so no surrounding literal text can reach Number(), and an
+  // explicit 0-23 check so a surprising ICU result stores null instead of a wrong hour.
+  const h = Number(hourPart);
+  const takeoff_hour = Number.isInteger(h) && h >= 0 && h <= 23 ? h : null;
+
   return {
     ok: true,
     meta: {
       flight_date,
       pilot_name: parsed.pilot?.trim() || null,
+      takeoff_hour,
+      takeoff_tz,
       takeoff_lat: first.latitude,
       takeoff_lon: first.longitude,
       landing_lat: last.latitude,

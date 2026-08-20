@@ -129,7 +129,16 @@ curl "{`${origin}/flights?fields=all&limit=10`}"</code
       <tr><td><code>point_count</code></td><td>number</td><td>Number of GPS fixes</td></tr>
       <tr><td><code>glider_type</code></td><td>string | null</td><td>Glider model from the IGC header</td></tr>
       <tr><td><code>size_bytes</code></td><td>number</td><td>Size of the IGC file in bytes</td></tr>
-      <tr><td><code>uploaded_at</code></td><td>number</td><td>Upload time, epoch seconds</td></tr>
+      <tr
+        ><td><code>takeoff_hour</code></td><td>number | null</td><td
+          >Local hour of day at takeoff, 0–23 (null for flights stored before this field existed)</td
+        ></tr
+      >
+      <tr
+        ><td><code>takeoff_tz</code></td><td>string | null</td><td
+          >IANA time zone at takeoff, e.g. <code>Europe/Paris</code></td
+        ></tr
+      >
       <tr
         ><td><code>url</code></td><td>string</td><td
           >Direct link to the <code>.igc</code> file (the default; see note below)</td
@@ -190,6 +199,8 @@ curl "{`${origin}/flights?fields=all&limit=10`}"</code
       "glider_type": "Ozone Zeno 2",
       "size_bytes": 184320,
       "uploaded_at": 1718460000,
+      "takeoff_hour": 14,
+      "takeoff_tz": "Europe/Paris",
       "url": "https://…/a1b2c3….igc"
     }
   ],`}</code
@@ -260,6 +271,8 @@ curl "{`${origin}/flights?fields=all&limit=10`}"</code
   "glider_type": "Ozone Zeno 2",
   "size_bytes": 184320,
   "uploaded_at": 1718460000,
+  "takeoff_hour": 14,
+  "takeoff_tz": "Europe/Paris",
   "url": "https://…/a1b2c3….igc"
 }`}</code
   ></pre>

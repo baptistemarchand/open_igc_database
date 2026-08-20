@@ -35,6 +35,7 @@
   "dependencies": {
     "@types/leaflet": "^1.9.21",
     "igc-parser": "^2.0.0",
-    "leaflet": "^1.9.4"
+    "leaflet": "^1.9.4",
+    "tz-lookup": "^6.1.25"
   }
 }

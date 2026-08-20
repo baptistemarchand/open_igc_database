@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { PageProps } from './$types';
-  import { formatDuration, formatCoord, formatBytes, formatEpochDate } from '$lib/format';
+  import { formatDuration, formatCoord, formatBytes, formatEpochDate, formatHour } from '$lib/format';
 
   let { data }: PageProps = $props();
   const f = $derived(data.flight);
@@ -86,6 +86,7 @@
   >
     <tbody>
       <tr><th>Date</th><td>{f.flight_date}</td></tr>
+      <tr><th>Takeoff time</th><td>{formatHour(f.takeoff_hour)}{f.takeoff_tz ? ` (${f.takeoff_tz})` : ''}</td></tr>
       <tr><th>Pilot</th><td>{f.pilot_name ?? '—'}</td></tr>
       <tr><th>Glider</th><td>{f.glider_type ?? '—'}</td></tr>
       <tr><th>Duration</th><td>{formatDuration(f.duration_s)}</td></tr>

@@ -78,8 +78,9 @@ function fail(msg: string): never {
 // --- Ingest (mirror of src/lib/upload.ts, minus the bindings) ------------------
 const UPSERT_SQL = `INSERT INTO flights
     (id, flight_date, pilot_name, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
-     duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at,
+     takeoff_hour, takeoff_tz)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     flight_date = excluded.flight_date,
     pilot_name = excluded.pilot_name,
@@ -92,7 +93,9 @@ const UPSERT_SQL = `INSERT INTO flights
     point_count = excluded.point_count,
     glider_type = excluded.glider_type,
     size_bytes = excluded.size_bytes,
-    uploaded_at = excluded.uploaded_at`;
+    uploaded_at = excluded.uploaded_at,
+    takeoff_hour = excluded.takeoff_hour,
+    takeoff_tz = excluded.takeoff_tz`;
 
 const upsertParams = (f: Flight): unknown[] => [
   f.id,
@@ -108,6 +111,8 @@ const upsertParams = (f: Flight): unknown[] => [
   f.glider_type,
   f.size_bytes,
   f.uploaded_at,
+  f.takeoff_hour,
+  f.takeoff_tz,
 ];
 
 // --- Main ----------------------------------------------------------------------
