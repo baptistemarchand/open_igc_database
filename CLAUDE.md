@@ -73,8 +73,10 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
 - `src/lib/igc.ts` — parse/validate/extract + `stripIdentifyingHeaders`.
 - `src/lib/db.ts` — all D1 queries. `searchFlights` sort is whitelisted via
   `SORT_COLUMNS` (never interpolate a raw sort param); filters use bound `?` params.
-- `src/routes/flights/+server.ts` — public JSON API: `GET` lists all flights,
-  `POST` ingests one `.igc` from the request body (`?anonymous=1`), no auth.
+- `src/routes/flights/+server.ts` — public JSON API: `GET` returns one page of
+  flights (default & max 1000 via `limit`, `offset` to skip ahead), with a `next`
+  URL in the response for iterating the full dataset; `POST` ingests one `.igc`
+  from the request body (`?anonymous=1`), no auth.
   **Gotcha**: `POST` must send a non-form `Content-Type` (e.g.
   `application/octet-stream`). curl's `--data-binary` default is
   `application/x-www-form-urlencoded`, which SvelteKit's CSRF guard rejects with

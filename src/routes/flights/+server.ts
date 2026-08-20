@@ -1,5 +1,5 @@
 import { error, json } from '@sveltejs/kit';
-import { getAllFlights, type Flight } from '$lib/db';
+import { getFlightsPage, type Flight } from '$lib/db';
 import { ingestIgc } from '$lib/upload';
 import type { RequestHandler } from './$types';
 
@@ -10,26 +10,47 @@ function fileUrl(f: Flight, env: App.Platform['env'], origin: string): string {
 }
 
 /**
- * Public JSON API: returns every flight as an array.
+ * Public JSON API: returns one page of flights, newest first.
  *
- * Each item is the full D1 row plus a `url` field pointing at the raw .igc file.
- * In production that is the R2 public domain (R2_PUBLIC_URL); in dev/fallback it is
- * an absolute link to this app's own /f/<id> streaming route.
+ * `limit` (default & max 1000) and `offset` (default 0) are read from the query
+ * string and clamped rather than rejected on bad input. Each item is the full D1
+ * row plus a `url` field pointing at the raw .igc file. In production that is the
+ * R2 public domain (R2_PUBLIC_URL); in dev/fallback it is an absolute link to this
+ * app's own /f/<id> streaming route.
+ *
+ * The response also carries `total` and a `next` field: a ready-to-fetch absolute
+ * URL for the following page, or `null` once there's nothing left. `next` is set
+ * based on whether this page came back full (`flights.length === limit`), not by
+ * comparing against `total` — the COUNT(*) and the page SELECT are separate D1
+ * statements with no cross-statement snapshot isolation, so they can disagree by a
+ * row or two under concurrent uploads. A client should follow `next` until `null`
+ * to iterate the whole dataset.
  */
 export const GET: RequestHandler = async ({ platform, url }) => {
   if (!platform?.env) throw error(503, 'Storage unavailable');
 
-  const flights = await getAllFlights(platform.env.DB);
   const env = platform.env;
+  const limit = Number(url.searchParams.get('limit'));
+  const offset = Number(url.searchParams.get('offset'));
+  const page = await getFlightsPage(env.DB, limit, offset);
 
-  const items = flights.map((f) => ({
+  const flights = page.flights.map((f) => ({
     ...f,
     url: fileUrl(f, env, url.origin),
   }));
 
-  return json(items, {
-    headers: { 'Cache-Control': 'public, max-age=60' },
-  });
+  let next: string | null = null;
+  if (flights.length === page.limit) {
+    const nextUrl = new URL(url);
+    nextUrl.searchParams.set('limit', String(page.limit));
+    nextUrl.searchParams.set('offset', String(page.offset + page.limit));
+    next = nextUrl.toString();
+  }
+
+  return json(
+    { flights, total: page.total, limit: page.limit, offset: page.offset, next },
+    { headers: { 'Cache-Control': 'public, max-age=60' } },
+  );
 };
 
 /**
