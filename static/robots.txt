@@ -1,3 +1,18 @@
-# allow crawling everything by default
+# Cost control, not secrecy — everything here is public. See migration 0004.
+#
+# Each distinct combination of sort / dir / page / pilot / glider / from / to on
+# /browse is a separate URL running its own D1 query, so a crawler enumerating those
+# facets multiplies straight into the database. That is what exhausted D1's free-tier
+# daily row-read limit with no real visitors. `Disallow: /browse?` is a prefix match,
+# so it blocks the faceted variants while leaving bare /browse crawlable — which is
+# what links to the flight detail pages, the only pages actually worth indexing (and
+# single primary-key lookups, so cheap to serve).
+#
+# /flights is the bulk JSON API: 1000 rows a page, with a `next` link that would walk
+# a crawler through the entire corpus. /f/ streams raw .igc files through the Worker.
+# Neither has any business in a search index.
+
 User-agent: *
-Disallow:
+Disallow: /browse?
+Disallow: /flights
+Disallow: /f/

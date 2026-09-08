@@ -94,6 +94,38 @@ UPDATE … FROM v`, 500 rows per request: ~370 requests and ~100 s instead of 18
       and therefore _validated_ against strict patterns (never escaped) — same argument
       as `SORT_COLUMNS`/`FLIGHT_COLUMNS`. Resume is free: the target set is
       `WHERE takeoff_tz IS NULL`, so an interrupted run just gets re-run.
+- **Never run an unfiltered `COUNT(*)` on `flights`.** SQLite stores no row count, so it
+  scans a covering index end to end and D1 bills every entry: measured at **186,626
+  rows_read for one `SELECT COUNT(*)`**, on every `/browse` and `/flights` request. That
+  alone is ~27 requests against the 5M/day free-tier read limit, which is how the limit
+  got exceeded on a site nobody had the URL for. (Traffic attribution was never
+  confirmed — the API token in `scripts/import.env` lacks `Account Analytics: Read`, so
+  `wrangler d1 insights` returns `[]` and the GraphQL analytics API 403s. Add that scope
+  if it needs chasing.) Migration 0004 replaces it with a `meta(key, value)` counter read
+  via `getFlightCount` (one row).
+  - **Maintained by SQL triggers, not by `upsertFlight`.** The bulk scripts write to D1
+    through the REST API and never execute app code, so an app-level counter would drift
+    on the next re-import. `AFTER INSERT` is safe under `INSERT … ON CONFLICT DO UPDATE`:
+    SQLite fires INSERT triggers only on a genuine insert and UPDATE triggers on the
+    DO UPDATE path, so a re-upload doesn't double-count (verified, not assumed). The
+    `AFTER DELETE` counterpart also disables SQLite's truncate optimisation, which is
+    what keeps a bare `DELETE FROM flights` (`empty-db.sh`) from leaving the count stale.
+  - `getFlightCount` **throws** if the row is missing rather than falling back to a real
+    `COUNT(*)` — the only cause is an unapplied migration, and a silent fallback would
+    restore the exact cost it exists to remove. `searchFlights` still pays a real COUNT
+    when a filter is set; that one is unavoidable and is not the common case.
+- **Sort tiebreakers follow the sort direction** (`ORDER BY <col> ${dir}, id ${dir}`), and
+  migration 0004 adds `(duration_s, id)` / `(max_altitude, id)` to go with 0002's
+  `(flight_date, id)`. The indexes are the real fix — those two columns had none, so
+  sorting by them was a genuine full scan plus a full sort to return 50 rows. The
+  direction match is cheaper insurance and the reasoning is counter-intuitive enough to
+  write down: `ORDER BY col DESC, id ASC` over a `(col, id)` index does **not** read the
+  whole table — SQLite sorts only each run of equal `col` values ("TEMP B-TREE FOR LAST
+  TERM") and exits at the LIMIT, ~1 ms at 200k rows. It degenerates only when one value
+  covers a huge run, which `max_altitude ASC` does (every NULL row, one run): 88 ms and a
+  full read, versus 0 ms matched. Cost: same-date flights come back in a different order
+  than before, including from the public API — still newest-first and still total/stable.
+
 - **Uploads are rejected** for: >5 MB, unparseable, <5 valid fixes, bad date, or
   out-of-range coords. `ingestIgc`/`extractMetadata` never throw on bad input — they
   return `{ ok: false, error }`.
@@ -121,6 +153,7 @@ UPDATE … FROM v`, 500 rows per request: ~370 requests and ~100 s instead of 18
 - `src/lib/db.ts` — all D1 queries. `searchFlights` sort is whitelisted via
   `SORT_COLUMNS` (never interpolate a raw sort param); filters use bound `?` params.
   `getFlightsPage` expects `limit`/`offset` already bounded by the caller.
+  `getFlightCount` is the cached row count — read the invariant above before touching it.
 - `src/lib/params.ts` — `intParam` and `fieldsParam`, the one place query params get
   validated. `intParam`: absent → the supplied default; anything else must match
   `/^\d+$/` and sit within `[min, max]` or it throws `error(400, …)`. `fieldsParam`
@@ -166,3 +199,14 @@ UPDATE … FROM v`, 500 rows per request: ~370 requests and ~100 s instead of 18
 ## Known gaps
 
 No rate limiting / WAF on upload yet (noted in README as production TODO).
+
+Crawler cost control is only half done. `static/robots.txt` disallows `/browse?` (the
+faceted URLs — every sort/dir/page/filter combination is a distinct URL running its own
+query), `/flights` and `/f/`, leaving bare `/browse` crawlable so the detail pages stay
+discoverable; there is no sitemap, so blocking `/browse` outright would de-index the
+site. `/browse` sets `Cache-Control: public, max-age=60`, which only gets browsers and
+intermediaries — **Cloudflare does not edge-cache HTML from a Worker by default**, so
+absorbing crawler traffic before it reaches D1 still needs a Cache Rule on the zone.
+That rule is not configured. Also unfixed: `pilot`/`glider` filters use
+`LIKE '%x%'`, whose leading wildcard can never use an index, so a filtered search is
+still a full scan — prefix matching or FTS5 would be the fix.

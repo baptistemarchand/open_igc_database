@@ -63,6 +63,28 @@ export async function getFlight(db: D1Database, id: string): Promise<Flight | nu
 }
 
 /**
+ * Total number of flights, read from the `meta` counter maintained by the triggers in
+ * migration 0004 — one row read instead of one per flight.
+ *
+ * This is the single most important cost decision in this file. `SELECT COUNT(*) FROM
+ * flights` looks free but isn't: SQLite has no stored row count, so it scans a covering
+ * index end to end and D1 bills every entry. Measured on prod at 186,626 rows, that is
+ * 186,626 rows_read *per request*, against a 5M/day free-tier limit — roughly 13 page
+ * views a day. Never reintroduce a bare COUNT(*) on an unfiltered `flights`; a filtered
+ * one (see `searchFlights`) is unavoidable and only runs when a filter is actually set.
+ *
+ * Throws rather than falling back to a real COUNT(*) if the row is missing: the only
+ * way that happens is an unapplied migration, and a loud failure is much better than
+ * silently restoring the exact cost this exists to remove.
+ */
+export async function getFlightCount(db: D1Database): Promise<number> {
+  const row = await db.prepare("SELECT value FROM meta WHERE key = 'flight_count'").first<{ value: number }>();
+  if (!row)
+    throw new Error('meta.flight_count missing — apply migration 0004 (npx wrangler d1 migrations apply open-igc-db)');
+  return row.value;
+}
+
+/**
  * Real D1 columns, in schema order.
  *
  * Doubles as the whitelist backing the API's `fields` param: the only strings ever
@@ -121,6 +143,18 @@ export const DEFAULT_FLIGHTS_PAGE_SIZE = MAX_FLIGHTS_PAGE_SIZE;
  * to returning a download URL only, so most requests read one column instead of
  * fifteen. Interpolating the names is safe because they can only come from
  * `FLIGHT_COLUMNS` (`FlightColumn` has no other inhabitants), never from a request.
+ *
+ * The order is `flight_date DESC, id DESC` — the tiebreaker deliberately matches the
+ * date's direction so `idx_flights_date_id` satisfies the ORDER BY outright. With the
+ * previous `id ASC` SQLite still had to partial-sort each run of same-date rows; that
+ * is cheap at normal cardinality but unbounded when one date covers many rows. `id` is
+ * a content hash, so which way it points is meaningless.
+ *
+ * This does change the public API's tiebreak: same-date flights come back in a
+ * different order than before. Still newest-first, still a total and stable order —
+ * but a caller paging with `offset` across the change sees the shuffle. Acceptable
+ * because offset pagination over a live table was never snapshot-consistent anyway
+ * (see the `next` note above), and it keeps browse and the API ordering identical.
  */
 export async function getFlightsPage(
   db: D1Database,
@@ -130,14 +164,14 @@ export async function getFlightsPage(
 ): Promise<FlightsPage> {
   if (columns.length === 0) throw new Error('getFlightsPage: columns must not be empty');
 
-  const totalRow = await db.prepare('SELECT COUNT(*) AS n FROM flights').first<{ n: number }>();
+  const total = await getFlightCount(db);
 
   const { results } = await db
-    .prepare(`SELECT ${columns.join(', ')} FROM flights ORDER BY flight_date DESC, id ASC LIMIT ? OFFSET ?`)
+    .prepare(`SELECT ${columns.join(', ')} FROM flights ORDER BY flight_date DESC, id DESC LIMIT ? OFFSET ?`)
     .bind(limit, offset)
     .all<Partial<Flight>>();
 
-  return { flights: results ?? [], total: totalRow?.n ?? 0, limit, offset };
+  return { flights: results ?? [], total, limit, offset };
 }
 
 /** Whitelisted sort keys → column, guarding against injection via the sort param. */
@@ -192,19 +226,34 @@ export async function searchFlights(db: D1Database, p: SearchParams): Promise<Se
   const limit = Math.min(Math.max(p.limit ?? 50, 1), 100);
   const offset = Math.max(p.offset ?? 0, 0);
 
-  const totalRow = await db
-    .prepare(`SELECT COUNT(*) AS n FROM flights ${whereSql}`)
-    .bind(...args)
-    .first<{ n: number }>();
+  // Only pay for a COUNT when a filter narrows the set. Unfiltered, the answer is the
+  // cached counter — see getFlightCount for why the bare COUNT(*) had to go.
+  let total: number;
+  if (where.length === 0) {
+    total = await getFlightCount(db);
+  } else {
+    const totalRow = await db
+      .prepare(`SELECT COUNT(*) AS n FROM flights ${whereSql}`)
+      .bind(...args)
+      .first<{ n: number }>();
+    total = totalRow?.n ?? 0;
+  }
 
+  // `id ${dir}`, not `id ASC`: the tiebreaker points the same way as the sort column so
+  // the (col, id) index satisfies the whole ORDER BY with no sorter at all. Mixed
+  // directions are not the disaster they look like — SQLite partial-sorts only each run
+  // of equal `col` values and still exits at the LIMIT — but that run is unbounded, and
+  // `ORDER BY max_altitude ASC` leads with every NULL row as a single run. `id` is a
+  // content hash, so its direction is arbitrary; all that matters is a total, stable
+  // order. See migration 0004 for the measurements.
   const { results } = await db
     .prepare(
       `SELECT * FROM flights ${whereSql}
-       ORDER BY ${sortCol} ${dir}, id ASC
+       ORDER BY ${sortCol} ${dir}, id ${dir}
        LIMIT ? OFFSET ?`,
     )
     .bind(...args, limit, offset)
     .all<Flight>();
 
-  return { flights: results ?? [], total: totalRow?.n ?? 0 };
+  return { flights: results ?? [], total };
 }
