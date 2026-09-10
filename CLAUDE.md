@@ -98,11 +98,17 @@ UPDATE … FROM v`, 500 rows per request: ~370 requests and ~100 s instead of 18
   scans a covering index end to end and D1 bills every entry: measured at **186,626
   rows_read for one `SELECT COUNT(*)`**, on every `/browse` and `/flights` request. That
   alone is ~27 requests against the 5M/day free-tier read limit, which is how the limit
-  got exceeded on a site nobody had the URL for. (Traffic attribution was never
-  confirmed — the API token in `scripts/import.env` lacks `Account Analytics: Read`, so
-  `wrangler d1 insights` returns `[]` and the GraphQL analytics API 403s. Add that scope
-  if it needs chasing.) Migration 0004 replaces it with a `meta(key, value)` counter read
-  via `getFlightCount` (one row).
+  got exceeded on a site nobody had the URL for. Migration 0004 replaces it with a
+  `meta(key, value)` counter read via `getFlightCount` (one row).
+  - Confirmed against prod on 2026-09-10, before/after: the counter reads **1 row** where
+    the `COUNT(*)` read 186,626, and a `/browse` view went from 373,252 rows to 51.
+  - **`wrangler d1 insights` is the tool for this**, and it needs `Account Analytics:
+Read` on the token (`scripts/import.env`) — without that scope it silently returns
+    `[]` rather than erroring, and the GraphQL `d1AnalyticsAdaptiveGroups` endpoint 403s
+    with "not authorized for that account". The scope is on the token as of 2026-09-10.
+    What it showed over 7 days: 30.1M rows read, 15.1M of it the unfiltered `COUNT(*)`
+    (87 runs) and 14.9M the two unindexed sorts (40 runs), against **zero writes** and a
+    steady overnight request rate — automated crawling, not users.
   - **Maintained by SQL triggers, not by `upsertFlight`.** The bulk scripts write to D1
     through the REST API and never execute app code, so an app-level counter would drift
     on the next re-import. `AFTER INSERT` is safe under `INSERT … ON CONFLICT DO UPDATE`:
@@ -210,3 +216,12 @@ absorbing crawler traffic before it reaches D1 still needs a Cache Rule on the z
 That rule is not configured. Also unfixed: `pilot`/`glider` filters use
 `LIKE '%x%'`, whose leading wildcard can never use an index, so a filtered search is
 still a full scan — prefix matching or FTS5 would be the fix.
+
+**`OFFSET` still walks the rows it skips**, which is now the largest remaining read
+vector. Measured on prod: `LIMIT 50 OFFSET 10000` reads 10,050 rows, and walking the
+whole `/flights` API via its `next` chain (187 pages × 1000) would read ~17M — more than
+a day's budget in one crawl. `robots.txt` keeps well-behaved crawlers out of both paged
+paths, but that is a request, not an enforcement. The real fix is keyset pagination
+(`WHERE (flight_date, id) < (?, ?)` instead of `OFFSET`), which the `(col, id)` indexes
+from 0004 already support; it would change the public API's paging contract, so it was
+left out of that migration.
