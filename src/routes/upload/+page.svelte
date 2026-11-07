@@ -35,22 +35,50 @@
    * batch on a single, CPU-metered invocation.
    */
   async function uploadOne(file: File, anonymous: boolean, onOverload: () => void): Promise<FileResult> {
+    // Read the file up front: when it is passed straight as the body, a file the phone
+    // can't read (cloud-backed, not downloaded) fails with the same opaque TypeError as a
+    // dropped connection, and the two need different fixes from the user.
+    let body: ArrayBuffer;
     try {
-      const res = await fetch(`/flights${anonymous ? '?anonymous=1' : ''}`, {
+      body = await file.arrayBuffer();
+    } catch (err) {
+      console.error(`Could not read ${file.name}`, err);
+      return {
+        name: file.name,
+        status: 'error',
+        error: `Could not read the file on this device (${describeError(err)}). If it is stored in the cloud, download it locally first.`,
+      };
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`/flights${anonymous ? '?anonymous=1' : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
-        body: file,
+        body,
       });
-      if (res.status === 503) {
-        onOverload();
-        return { name: file.name, status: 'error', error: 'Server overloaded — try again shortly.' };
-      }
-      const data = (await res.json().catch(() => ({}))) as { status?: string; id?: string; error?: string };
-      if (!res.ok) return { name: file.name, status: 'error', error: data.error ?? `Upload failed (${res.status}).` };
-      return { name: file.name, status: data.status === 'duplicate' ? 'duplicate' : 'added', id: data.id };
-    } catch {
-      return { name: file.name, status: 'error', error: 'Network error.' };
+    } catch (err) {
+      console.error(`Upload of ${file.name} failed before any response`, err);
+      return {
+        name: file.name,
+        status: 'error',
+        error: `Network error: no response from the server (${describeError(err)}). Check your connection and keep this page open while uploading.`,
+      };
     }
+
+    if (res.status === 503) {
+      onOverload();
+      return { name: file.name, status: 'error', error: 'Server overloaded — try again shortly.' };
+    }
+    const data = (await res.json().catch(() => ({}))) as { status?: string; id?: string; error?: string };
+    if (!res.ok) return { name: file.name, status: 'error', error: data.error ?? `Upload failed (${res.status}).` };
+    return { name: file.name, status: data.status === 'duplicate' ? 'duplicate' : 'added', id: data.id };
+  }
+
+  /** Browsers word these differently ("Failed to fetch", "Load failed", …), so show theirs. */
+  function describeError(err: unknown): string {
+    if (err instanceof Error) return err.name === 'TypeError' ? err.message : `${err.name}: ${err.message}`;
+    return String(err);
   }
 
   async function handleSubmit(e: SubmitEvent) {
