@@ -25,8 +25,7 @@
   const dup = $derived(displayResults?.filter((r) => r.status === 'duplicate').length ?? 0);
   const errs = $derived(displayResults?.filter((r) => r.status === 'error').length ?? 0);
 
-  const OVERLOADED_MSG =
-    'The server is temporarily overloaded (too many uploads at once). Please wait a few minutes and try again.';
+  const OVERLOADED_MSG = 'The server is temporarily overloaded. Please wait a few minutes and try again.';
 
   /**
    * Upload one file via the JSON API (POST /flights), which shares the exact same
@@ -66,13 +65,54 @@
       };
     }
 
-    if (res.status === 503) {
-      onOverload();
-      return { name: file.name, status: 'error', error: 'Server overloaded — try again shortly.' };
+    const text = await res.text().catch(() => '');
+    if (!res.ok) {
+      const cause = describeHttpError(res.status, text);
+      if (cause.overloaded) onOverload();
+      console.error(`Upload of ${file.name} failed with ${res.status}`, text.slice(0, 500));
+      return { name: file.name, status: 'error', error: cause.message };
     }
-    const data = (await res.json().catch(() => ({}))) as { status?: string; id?: string; error?: string };
-    if (!res.ok) return { name: file.name, status: 'error', error: data.error ?? `Upload failed (${res.status}).` };
+    const data = parseJson(text) as { status?: string; id?: string };
     return { name: file.name, status: data.status === 'duplicate' ? 'duplicate' : 'added', id: data.id };
+  }
+
+  function parseJson(text: string): Record<string, unknown> {
+    try {
+      const v: unknown = JSON.parse(text);
+      return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Errors come from three places: our ingest (`{ error }`), SvelteKit's `error()`
+   * (`{ message }`), or Cloudflare itself when the Worker never answered — an HTML or
+   * plain-text page carrying a 4-digit code ("Error 1102" / "error code: 1102"). Only the
+   * last kind can be a real overload, so only it may raise the page-level banner.
+   */
+  function describeHttpError(status: number, text: string): { message: string; overloaded: boolean } {
+    const data = parseJson(text);
+    const own = data.error ?? data.message;
+    if (typeof own === 'string' && own) return { message: own, overloaded: false };
+
+    // Plain text for fetch() ("error code: 1102"), or the HTML page's code span.
+    const code = /(?:error code:\s*|cf-error-code[^>]*>\s*|\berror\s+)(\d{4})\b/i.exec(text)?.[1];
+    if (code === '1102') {
+      return {
+        message: 'The server ran out of processing time on this file (Cloudflare error 1102). Retrying may work.',
+        overloaded: false,
+      };
+    }
+    if (code)
+      return {
+        message: `Upload failed (HTTP ${status}, Cloudflare error ${code}).`,
+        overloaded: status === 503 || status === 429,
+      };
+    if (status === 503 || status === 429) {
+      return { message: `Server overloaded (HTTP ${status}) — try again shortly.`, overloaded: true };
+    }
+    return { message: `Upload failed (HTTP ${status}).`, overloaded: false };
   }
 
   /** Browsers word these differently ("Failed to fetch", "Load failed", …), so show theirs. */
