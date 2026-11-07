@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { PageProps } from './$types';
   import { isZip, listZipEntries } from '$lib/zip';
-  import { gzip, isGzip } from '$lib/gzip';
+  import { gunzipCapped, gzip, isGzip } from '$lib/gzip';
+  import { extractMetadata, METADATA_HEADER } from '$lib/igc';
   import { stripIdentifyingHeaders } from '$lib/anonymize';
 
   let { form }: PageProps = $props();
@@ -34,6 +35,9 @@
     read: () => Promise<ArrayBuffer>;
   }
 
+  // Mirrors MAX_FILE_BYTES in $lib/upload (server-only module).
+  const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
   const OVERLOADED_MSG = 'The server is temporarily overloaded. Please wait a few minutes and try again.';
 
   /**
@@ -58,14 +62,15 @@
       };
     }
 
-    body = await prepare(body, anonymous);
+    const prepared = await prepare(body, anonymous);
+    if ('error' in prepared) return { name: file.name, status: 'error', error: prepared.error };
 
     let res: Response;
     try {
       res = await fetch(`/flights${anonymous ? '?anonymous=1' : ''}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body,
+        headers: { 'Content-Type': 'application/octet-stream', ...prepared.headers },
+        body: prepared.body,
       });
     } catch (err) {
       console.error(`Upload of ${file.name} failed before any response`, err);
@@ -88,24 +93,37 @@
   }
 
   /**
-   * Do the Worker's costliest step here: on the free plan it gets ~10 ms of CPU per
-   * request, and gzip alone takes ~6 ms on a median file. The Worker inflates instead
-   * (several times cheaper) and stores our gzip as is. For anonymous uploads we strip
-   * first so the stored gzip can be ours too; the Worker re-strips to check.
+   * Do the Worker's CPU-heavy work here. On the free plan it gets ~10 ms of CPU per
+   * request, and in prod a median upload took 20+ ms: parsing and gzip were both too
+   * much. So the page parses (same `extractMetadata` as the server) and sends the result
+   * in a header, and gzips the body; the Worker only inflates, hashes and shape-checks.
+   * Anonymous files are stripped first so the stored gzip can be ours; the Worker
+   * re-strips to check. A file that fails to parse is reported without a request.
    */
-  async function prepare(buf: ArrayBuffer, anonymous: boolean): Promise<ArrayBuffer> {
-    if (isGzip(buf)) return buf;
+  async function prepare(
+    buf: ArrayBuffer,
+    anonymous: boolean,
+  ): Promise<{ body: ArrayBuffer; headers: Record<string, string> } | { error: string }> {
+    if (isGzip(buf)) {
+      const inflated = await gunzipCapped(buf, MAX_UPLOAD_BYTES).catch(() => null);
+      if (!inflated) return { error: 'Corrupt or oversized gzip file.' };
+      buf = inflated;
+    }
+    const text = new TextDecoder().decode(buf);
+    const parsed = extractMetadata(text);
+    if (!parsed.ok) return { error: parsed.error };
+    const headers = { [METADATA_HEADER]: encodeURIComponent(JSON.stringify(parsed.meta)) };
+
     if (anonymous) {
-      const text = new TextDecoder().decode(buf);
       const stripped = stripIdentifyingHeaders(text);
       if (stripped !== text) buf = new TextEncoder().encode(stripped).buffer;
     }
     try {
-      return await gzip(buf);
+      return { body: await gzip(buf), headers };
     } catch (err) {
       // CompressionStream is missing on older browsers; the server still accepts raw IGC.
       console.warn('Could not gzip before upload, sending raw bytes', err);
-      return buf;
+      return { body: buf, headers };
     }
   }
 

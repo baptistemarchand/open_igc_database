@@ -40,8 +40,9 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
   PLT/CM2/GID/CID (keeps them structurally valid); glider _type_ GTY is kept on purpose
   (searchable, not identifying). When `anonymous`, the stripped bytes are stored and
   `pilot_name` is set to `"Anonymous"`.
-- **Metadata parsing/validation is server-side at upload only** (`src/lib/igc.ts`,
-  via `igc-parser`). Track points are never stored — D1 holds only the metadata columns
+- **Metadata is parsed once, at upload** (`extractMetadata` in `src/lib/igc.ts`, via
+  `igc-parser`) — in the **browser** for the upload page, on the Worker for API and
+  no-JS uploads (see the trusted-metadata invariant below). Track points are never stored — D1 holds only the metadata columns
   in `migrations/0001_init.sql`. The one exception is the **detail-page map**: the
   browser fetches the raw `.igc` from R2 and parses just the B-record lat/lons itself
   (tiny inline parser in `flight/[id]/+page.svelte`), so the worker never re-parses on a
@@ -161,10 +162,25 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
     re-strips as the check. If that changes nothing, the client gzip is kept; otherwise
     (curl, a stale page) the Worker stores its own stripped bytes and gzips them itself.
     Never skip the re-strip on the strength of the page having done it.
-  - Only metadata parsing (`igc-parser`, the second-biggest cost) still runs on the
-    Worker, on purpose: moving it to the browser means trusting client-supplied
-    metadata on a public, unauthenticated `POST`. Long tracklogs (~p90 and up) still
-    exceed 10 ms because of it.
+- **The upload page's metadata is trusted, not verified.** Browser gzip alone changed
+  nothing measurable in prod: Cloudflare analytics showed successful uploads at a
+  median 20–27 ms CPU both before and after (prod is ~4× slower than local Node, so the
+  local numbers above get proportions right, not absolutes), and once the free plan's
+  overrun allowance runs out, requests are killed at exactly 10 ms — in bursts during
+  a big batch, not per file. So the page also runs `extractMetadata` and sends the
+  result in the `X-Flight-Metadata` header (`encodeURIComponent(JSON)`, since header
+  values must be Latin-1); with it, `ingestIgc` skips parsing and only runs
+  `checkClaimedMetadata` (types, ranges, real date, bounded strings, rebuilt field by
+  field so extra keys never reach the INSERT) plus a sniff that the text starts with
+  an A record and has a B record. This was a deliberate trade, chosen over Workers
+  Paid ($5/month). What it does and doesn't allow:
+  - A hand-crafted `POST` can store **wrong metadata or a non-flight file** shaped like
+    IGC. It **cannot overwrite another flight**: the id is still hashed on the Worker
+    from the bytes it stores. Don't ever accept a client-supplied id.
+  - Requests without the header (curl, the no-JS form) still parse on the Worker and
+    still risk 1102 on long tracks.
+  - R2 holds the real files, so bad rows are recoverable: re-run `extractMetadata`
+    over the corpus offline, `backfill-takeoff-time.ts`-style, and diff against D1.
 
 ## Where things are
 

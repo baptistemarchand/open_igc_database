@@ -39,7 +39,58 @@ function isRealDate(iso: string): boolean {
 }
 
 /**
- * Parse an IGC file (server-side only) and extract the searchable/displayable metadata.
+ * Request header carrying browser-computed metadata, as `encodeURIComponent(JSON)`:
+ * header values must be Latin-1, and pilot names often aren't.
+ */
+export const METADATA_HEADER = 'X-Flight-Metadata';
+
+const MAX_TEXT_FIELD = 200;
+const IANA_ZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
+
+/**
+ * Shape-check metadata a client computed with `extractMetadata`, without the file.
+ * This can't prove the values match the track (that would mean parsing it, the cost
+ * we're avoiding); it only keeps impossible values out of D1: types, ranges, a real
+ * date, bounded strings. Returns null when anything is off.
+ */
+export function checkClaimedMetadata(raw: unknown): FlightMetadata | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Record<string, unknown>;
+  const num = (v: unknown, min: number, max: number) =>
+    typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+  const int = (v: unknown, min: number, max: number) => Number.isInteger(v) && num(v, min, max);
+  const text = (v: unknown) => v === null || (typeof v === 'string' && v.length <= MAX_TEXT_FIELD);
+
+  if (typeof m.flight_date !== 'string' || !isRealDate(m.flight_date)) return null;
+  if (!num(m.takeoff_lat, -90, 90) || !num(m.landing_lat, -90, 90)) return null;
+  if (!num(m.takeoff_lon, -180, 180) || !num(m.landing_lon, -180, 180)) return null;
+  if (!int(m.duration_s, 0, 7 * 86400)) return null;
+  if (!int(m.point_count, MIN_VALID_FIXES, 10_000_000)) return null;
+  if (m.max_altitude !== null && !int(m.max_altitude, -1000, 20_000)) return null;
+  if (m.takeoff_hour !== null && !int(m.takeoff_hour, 0, 23)) return null;
+  if (m.takeoff_tz !== null && !(typeof m.takeoff_tz === 'string' && IANA_ZONE.test(m.takeoff_tz))) return null;
+  if (!text(m.pilot_name) || !text(m.glider_type)) return null;
+
+  // Rebuilt field by field so unknown keys never reach the INSERT.
+  return {
+    flight_date: m.flight_date,
+    pilot_name: m.pilot_name as string | null,
+    takeoff_hour: m.takeoff_hour as number | null,
+    takeoff_tz: m.takeoff_tz as string | null,
+    takeoff_lat: m.takeoff_lat as number,
+    takeoff_lon: m.takeoff_lon as number,
+    landing_lat: m.landing_lat as number,
+    landing_lon: m.landing_lon as number,
+    duration_s: m.duration_s as number,
+    max_altitude: m.max_altitude as number | null,
+    point_count: m.point_count as number,
+    glider_type: m.glider_type as string | null,
+  };
+}
+
+/**
+ * Parse an IGC file and extract the searchable/displayable metadata. Runs on the
+ * server for API and no-JS uploads, and in the browser for the upload page.
  * Returns { ok: false, error } for anything that isn't a usable flight track so the
  * upload handler can reject junk without throwing.
  */

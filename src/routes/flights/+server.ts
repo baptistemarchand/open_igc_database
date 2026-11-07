@@ -9,6 +9,7 @@ import {
 } from '$lib/db';
 import { fieldsParam, intParam } from '$lib/params';
 import { ingestIgc } from '$lib/upload';
+import { METADATA_HEADER } from '$lib/igc';
 import type { RequestHandler } from './$types';
 
 /** Build the public download URL for a flight, matching GET and POST responses. */
@@ -111,9 +112,19 @@ export const POST: RequestHandler = async ({ request, platform, url }) => {
   if (buf.byteLength === 0) throw error(400, 'Empty request body — send the .igc file as the body.');
 
   const anonymous = url.searchParams.get('anonymous') != null;
+  const claimedHeader = request.headers.get(METADATA_HEADER);
+  let claimedMetadata: unknown;
+  if (claimedHeader != null) {
+    try {
+      claimedMetadata = JSON.parse(decodeURIComponent(claimedHeader));
+    } catch {
+      return json({ error: `Malformed ${METADATA_HEADER} header.` }, { status: 400 });
+    }
+  }
   const result = await ingestIgc(platform.env, buf, {
     anonymous,
     uploadedAt: Math.floor(Date.now() / 1000),
+    claimedMetadata,
   });
 
   if (!result.ok) return json({ error: result.error }, { status: 400 });

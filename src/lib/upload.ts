@@ -1,6 +1,6 @@
 import type { D1Database, R2Bucket } from '@cloudflare/workers-types';
 import { getFlight, upsertFlight, type Flight } from '$lib/db';
-import { extractMetadata, stripIdentifyingHeaders } from '$lib/igc';
+import { checkClaimedMetadata, extractMetadata, stripIdentifyingHeaders, type ExtractResult } from '$lib/igc';
 import { gunzipCapped, gzip, isGzip } from '$lib/gzip';
 
 export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — IGC files are small
@@ -22,6 +22,12 @@ export interface IngestOptions {
   anonymous: boolean;
   /** Upload time, epoch seconds — passed in so a batch shares one timestamp. */
   uploadedAt: number;
+  /**
+   * Metadata the client already extracted (the upload page does). When present the
+   * Worker skips parsing — the one step that still overran the free plan's CPU limit —
+   * and only shape-checks it. Absent for API and no-JS uploads, which are parsed here.
+   */
+  claimedMetadata?: unknown;
 }
 
 export type IngestResult = { ok: true; status: 'added' | 'duplicate'; flight: Flight } | { ok: false; error: string };
@@ -61,7 +67,7 @@ export async function ingestIgc(env: IngestEnv, body: ArrayBuffer, opts: IngestO
   }
 
   const text = new TextDecoder().decode(buf);
-  const parsed = extractMetadata(text);
+  const parsed = opts.claimedMetadata === undefined ? extractMetadata(text) : checkClaimed(text, opts.claimedMetadata);
   if (!parsed.ok) return { ok: false, error: parsed.error };
 
   // The id ignores identifying header fields, so the same track dedups to one flight
@@ -92,4 +98,18 @@ export async function ingestIgc(env: IngestEnv, body: ArrayBuffer, opts: IngestO
   await upsertFlight(env.DB, flight);
 
   return { ok: true, status: existed ? 'duplicate' : 'added', flight };
+}
+
+/**
+ * Trusted-metadata path. The values are the client's word: a hand-crafted request can
+ * store wrong metadata for its own file. What it can't do is overwrite another flight
+ * (the id is still hashed here) or store something that isn't even shaped like an IGC
+ * file — hence the O(1)-ish sniff below, in place of a parse.
+ */
+function checkClaimed(text: string, claimed: unknown): ExtractResult {
+  if (!/^\uFEFF?\s*A/.test(text) || !text.includes('\nB')) {
+    return { ok: false, error: 'Not a valid IGC file: no A record or no fixes.' };
+  }
+  const meta = checkClaimedMetadata(claimed);
+  return meta ? { ok: true, meta } : { ok: false, error: 'Invalid flight metadata.' };
 }
