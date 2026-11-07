@@ -30,6 +30,11 @@ export const actions: Actions = {
     const results: FileResult[] = [];
 
     for (const file of files) {
+      // Zips are unpacked by the page's JS; doing it here would parse the whole archive on one invocation.
+      if (/\.zip$/i.test(file.name)) {
+        results.push({ name: file.name, status: 'error', error: 'Uploading a .zip requires JavaScript.' });
+        continue;
+      }
       try {
         const result = await ingestIgc({ DB, BUCKET }, await file.arrayBuffer(), {
           anonymous,

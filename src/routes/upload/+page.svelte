@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PageProps } from './$types';
+  import { isZip, listZipEntries } from '$lib/zip';
 
   let { form }: PageProps = $props();
 
@@ -25,6 +26,12 @@
   const dup = $derived(displayResults?.filter((r) => r.status === 'duplicate').length ?? 0);
   const errs = $derived(displayResults?.filter((r) => r.status === 'error').length ?? 0);
 
+  /** One `.igc` to send: a picked file, or an entry inflated from a picked zip. */
+  interface UploadItem {
+    name: string;
+    read: () => Promise<ArrayBuffer>;
+  }
+
   const OVERLOADED_MSG = 'The server is temporarily overloaded. Please wait a few minutes and try again.';
 
   /**
@@ -33,13 +40,13 @@
    * invocation per file — each gets its own CPU budget instead of parsing the whole
    * batch on a single, CPU-metered invocation.
    */
-  async function uploadOne(file: File, anonymous: boolean, onOverload: () => void): Promise<FileResult> {
+  async function uploadOne(file: UploadItem, anonymous: boolean, onOverload: () => void): Promise<FileResult> {
     // Read the file up front: when it is passed straight as the body, a file the phone
     // can't read (cloud-backed, not downloaded) fails with the same opaque TypeError as a
     // dropped connection, and the two need different fixes from the user.
     let body: ArrayBuffer;
     try {
-      body = await file.arrayBuffer();
+      body = await file.read();
     } catch (err) {
       console.error(`Could not read ${file.name}`, err);
       return {
@@ -121,6 +128,36 @@
     return String(err);
   }
 
+  /**
+   * Zips are opened in the browser so each `.igc` inside still gets its own request (and
+   * its own worker CPU budget); shipping the archive to the server would put the whole
+   * batch on one invocation again. Entries are inflated lazily, one at a time.
+   */
+  async function expand(files: File[]): Promise<{ items: UploadItem[]; failed: FileResult[] }> {
+    const items: UploadItem[] = [];
+    const failed: FileResult[] = [];
+    for (const file of files) {
+      if (!isZip(file)) {
+        items.push({ name: file.name, read: () => file.arrayBuffer() });
+        continue;
+      }
+      try {
+        const entries = listZipEntries(await file.arrayBuffer()).filter(
+          // macOS "Compress" adds __MACOSX/ and ._ resource-fork twins next to every file.
+          (e) => /\.igc$/i.test(e.path) && !/(^|\/)(__MACOSX\/|\._)/.test(e.path),
+        );
+        if (entries.length === 0) {
+          failed.push({ name: file.name, status: 'error', error: 'No .igc files found in this zip.' });
+        }
+        for (const e of entries) items.push({ name: `${file.name}/${e.path}`, read: e.read });
+      } catch (err) {
+        console.error(`Could not open ${file.name}`, err);
+        failed.push({ name: file.name, status: 'error', error: `Could not open the zip (${describeError(err)}).` });
+      }
+    }
+    return { items, failed };
+  }
+
   async function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
     const formEl = e.currentTarget as HTMLFormElement;
@@ -133,16 +170,20 @@
     requestError = null;
     results = [];
     done = 0;
-    total = files.length;
+    total = 0;
     let sawOverload = false;
+
+    const { items, failed } = await expand(files);
+    total = items.length;
 
     // One file at a time: with 4 in parallel, some files picked from an app's own storage
     // on Android (XCTrack) failed to read with NotFoundError/NotReadableError, while the
     // same files uploaded fine on their own. The server action still handles the no-JS
     // path as one batch request.
     const CONCURRENCY = 1;
-    const queue = [...files];
-    const collected: FileResult[] = [];
+    const queue = [...items];
+    const collected: FileResult[] = [...failed];
+    results = [...collected];
     const worker = async () => {
       for (let file = queue.shift(); file; file = queue.shift()) {
         const r = await uploadOne(file, anonymous, () => (sawOverload = true));
@@ -151,7 +192,7 @@
         done += 1;
       }
     };
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, files.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
 
     if (sawOverload) requestError = OVERLOADED_MSG;
     submitting = false;
@@ -164,7 +205,8 @@
 
 <h1 class="mb-5">Upload flights</h1>
 <p class="max-w-xl text-gray-700 mb-5">
-  Select one or more <code>.igc</code> files. They become publicly available for anyone to download and use for research.
+  Select one or more <code>.igc</code> files, or a <code>.zip</code> containing them. They become publicly available for anyone
+  to download and use for research.
 </p>
 
 <!-- JS path: handleSubmit fans out one request per file. Without JS the form posts
@@ -178,7 +220,7 @@
   <input
     type="file"
     name="files"
-    accept=".igc,text/plain"
+    accept=".igc,text/plain,.zip,application/zip"
     multiple
     required
     class="block cursor-pointer w-full text-sm text-gray-500
