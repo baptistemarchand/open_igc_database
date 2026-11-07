@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { PageProps } from './$types';
   import { isZip, listZipEntries } from '$lib/zip';
+  import { gzip, isGzip } from '$lib/gzip';
+  import { stripIdentifyingHeaders } from '$lib/anonymize';
 
   let { form }: PageProps = $props();
 
@@ -56,6 +58,8 @@
       };
     }
 
+    body = await prepare(body, anonymous);
+
     let res: Response;
     try {
       res = await fetch(`/flights${anonymous ? '?anonymous=1' : ''}`, {
@@ -81,6 +85,28 @@
     }
     const data = parseJson(text) as { status?: string; id?: string };
     return { name: file.name, status: data.status === 'duplicate' ? 'duplicate' : 'added', id: data.id };
+  }
+
+  /**
+   * Do the Worker's costliest step here: on the free plan it gets ~10 ms of CPU per
+   * request, and gzip alone takes ~6 ms on a median file. The Worker inflates instead
+   * (several times cheaper) and stores our gzip as is. For anonymous uploads we strip
+   * first so the stored gzip can be ours too; the Worker re-strips to check.
+   */
+  async function prepare(buf: ArrayBuffer, anonymous: boolean): Promise<ArrayBuffer> {
+    if (isGzip(buf)) return buf;
+    if (anonymous) {
+      const text = new TextDecoder().decode(buf);
+      const stripped = stripIdentifyingHeaders(text);
+      if (stripped !== text) buf = new TextEncoder().encode(stripped).buffer;
+    }
+    try {
+      return await gzip(buf);
+    } catch (err) {
+      // CompressionStream is missing on older browsers; the server still accepts raw IGC.
+      console.warn('Could not gzip before upload, sending raw bytes', err);
+      return buf;
+    }
   }
 
   function parseJson(text: string): Record<string, unknown> {

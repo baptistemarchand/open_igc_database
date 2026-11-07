@@ -146,6 +146,25 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   `.igc` files are themselves pre-gzipped, so it gunzips only in-memory to parse/hash,
   and re-gzips only for anonymous imports (where stripping headers changes the bytes);
   named imports upload the source gzip bytes unmodified.
+- **Uploads may arrive gzipped, and the upload page always sends gzip.** Gzip was the
+  costliest step of an ingest (measured 2026-11-07 on the local corpus: ~6 ms of a ~11 ms
+  median file, against the free plan's ~10 ms CPU per request, which 1102'd uploads in
+  prod), and inflating costs about a sixth of that. So `upload/+page.svelte` compresses
+  in the browser, and `ingestIgc` detects gzip by **magic bytes** (not a header, so any
+  client and the no-JS form get it for free), inflates with `gunzipCapped`, and stores
+  the **client's gzip untouched**. That is safe only because the stored bytes are the
+  ones whose inflation was validated and hashed — don't store a client gzip anywhere
+  that skips the inflate. Two things to keep:
+  - `gunzipCapped` stops at `MAX_FILE_BYTES` of _output_: the 5 MB check on the body
+    alone would let a 20 KB gzip bomb expand to gigabytes on the Worker.
+  - **Anonymous uploads**: the page strips headers before gzipping, and the Worker
+    re-strips as the check. If that changes nothing, the client gzip is kept; otherwise
+    (curl, a stale page) the Worker stores its own stripped bytes and gzips them itself.
+    Never skip the re-strip on the strength of the page having done it.
+  - Only metadata parsing (`igc-parser`, the second-biggest cost) still runs on the
+    Worker, on purpose: moving it to the browser means trusting client-supplied
+    metadata on a public, unauthenticated `POST`. Long tracklogs (~p90 and up) still
+    exceed 10 ms because of it.
 
 ## Where things are
 
@@ -155,7 +174,10 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   file separately to `/flights` (one file = one worker invocation = its own CPU budget),
   streaming results in. The multi-file server action in `upload/+page.server.ts` is the
   no-JS fallback (whole batch in one invocation — the CPU-heavy path we avoid via JS).
-- `src/lib/igc.ts` — parse/validate/extract + `stripIdentifyingHeaders`.
+- `src/lib/igc.ts` — parse/validate/extract; re-exports `stripIdentifyingHeaders`.
+- `src/lib/anonymize.ts` — `stripIdentifyingHeaders`, kept dependency-free so the
+  browser can import it without bundling `igc-parser`/`tz-lookup`.
+- `src/lib/gzip.ts` — `gzip`, `isGzip`, `gunzipCapped`, shared by Worker and browser.
 - `src/lib/db.ts` — all D1 queries. `searchFlights` sort is whitelisted via
   `SORT_COLUMNS` (never interpolate a raw sort param); filters use bound `?` params.
   `getFlightsPage` expects `limit`/`offset` already bounded by the caller.

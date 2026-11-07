@@ -1,6 +1,7 @@
 import type { D1Database, R2Bucket } from '@cloudflare/workers-types';
 import { getFlight, upsertFlight, type Flight } from '$lib/db';
 import { extractMetadata, stripIdentifyingHeaders } from '$lib/igc';
+import { gunzipCapped, gzip, isGzip } from '$lib/gzip';
 
 export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — IGC files are small
 
@@ -8,17 +9,6 @@ export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — IGC files are small
 export async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', buf);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Gzip-compress bytes via the runtime's native CompressionStream (supported by both
- * `workerd` — Miniflare local dev and production — and Node, no dependency needed).
- * R2 stores gzip only, never raw IGC bytes; see the `contentEncoding` set in the
- * `BUCKET.put` below.
- */
-async function gzip(buf: ArrayBuffer): Promise<ArrayBuffer> {
-  const stream = new Blob([buf]).stream().pipeThrough(new CompressionStream('gzip'));
-  return new Response(stream).arrayBuffer();
 }
 
 /** The storage bindings a single ingest needs. */
@@ -45,10 +35,29 @@ export type IngestResult = { ok: true; status: 'added' | 'duplicate'; flight: Fl
  * one flight whether or not it was uploaded anonymously. On an id conflict the row is
  * overwritten (latest-upload-wins, via upsertFlight); `status` reports whether the row
  * already existed. Never throws for bad input — junk is returned as { ok: false }.
+ *
+ * `body` may be the IGC bytes or a gzip of them (detected by magic bytes, so any client
+ * can send either). Gzip is the single most expensive step of an ingest, so the upload
+ * page compresses in the browser and the Worker only inflates — several times cheaper —
+ * then stores the client's gzip untouched. That is safe because inflating it is what
+ * produced the text we validated and hashed: the stored bytes can't differ from it.
  */
-export async function ingestIgc(env: IngestEnv, buf: ArrayBuffer, opts: IngestOptions): Promise<IngestResult> {
-  if (buf.byteLength > MAX_FILE_BYTES) {
-    return { ok: false, error: 'File too large (max 5 MB).' };
+export async function ingestIgc(env: IngestEnv, body: ArrayBuffer, opts: IngestOptions): Promise<IngestResult> {
+  const tooLarge = { ok: false, error: 'File too large (max 5 MB).' } as const;
+  if (body.byteLength > MAX_FILE_BYTES) return tooLarge;
+
+  let buf = body;
+  let clientGzip: ArrayBuffer | null = null;
+  if (isGzip(body)) {
+    let inflated: ArrayBuffer | null;
+    try {
+      inflated = await gunzipCapped(body, MAX_FILE_BYTES);
+    } catch {
+      return { ok: false, error: 'Corrupt gzip data.' };
+    }
+    if (!inflated) return tooLarge;
+    buf = inflated;
+    clientGzip = body;
   }
 
   const text = new TextDecoder().decode(buf);
@@ -57,13 +66,18 @@ export async function ingestIgc(env: IngestEnv, buf: ArrayBuffer, opts: IngestOp
 
   // The id ignores identifying header fields, so the same track dedups to one flight
   // whether or not it was uploaded anonymously.
-  const scrubbed = new TextEncoder().encode(stripIdentifyingHeaders(text)).buffer;
+  const scrubbedText = stripIdentifyingHeaders(text);
+  const scrubbed = new TextEncoder().encode(scrubbedText).buffer;
   const id = await sha256Hex(scrubbed);
-  const storeBuf = opts.anonymous ? scrubbed : buf;
+  // An anonymous file the page already stripped needs no rewrite, which is what lets
+  // anonymous uploads keep the client's gzip too. Re-stripping is the check: never trust
+  // the client to have done it.
+  const storeBuf = opts.anonymous && scrubbedText !== text ? scrubbed : buf;
+  const gz = clientGzip && storeBuf === buf ? clientGzip : await gzip(storeBuf);
 
   // size_bytes reflects the logical (uncompressed) IGC file, so it's captured from
   // storeBuf before gzip — R2 itself holds only the compressed bytes.
-  await env.BUCKET.put(`${id}.igc`, await gzip(storeBuf), {
+  await env.BUCKET.put(`${id}.igc`, gz, {
     httpMetadata: { contentType: 'text/plain; charset=utf-8', contentEncoding: 'gzip' },
   });
 
