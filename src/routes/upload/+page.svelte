@@ -96,9 +96,11 @@
     total = files.length;
     let sawOverload = false;
 
-    // Fan out a few files at a time so we don't flood the edge, streaming results in as
-    // they land. The server action still handles the no-JS path as one batch request.
-    const CONCURRENCY = 4;
+    // One file at a time: with 4 in parallel, some files picked from an app's own storage
+    // on Android (XCTrack) failed to read with NotFoundError/NotReadableError, while the
+    // same files uploaded fine on their own. The server action still handles the no-JS
+    // path as one batch request.
+    const CONCURRENCY = 1;
     const queue = [...files];
     const collected: FileResult[] = [];
     const worker = async () => {
