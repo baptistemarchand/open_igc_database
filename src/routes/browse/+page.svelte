@@ -96,8 +96,7 @@
           <th>Glider</th>
           <th class="text-right!"><a href={sortLink('duration')}>Duration{sortArrow('duration')}</a></th>
           <th class="text-right!"><a href={sortLink('altitude')}>Max alt{sortArrow('altitude')}</a></th>
-          <th class="text-right!"><a href={sortLink('xcontest')}>XContest{sortArrow('xcontest')}</a></th>
-          <th class="text-right!"><a href={sortLink('ffvl')}>FFVL{sortArrow('ffvl')}</a></th>
+          <th class="text-right!"><a href={sortLink('xcontest')}>Score{sortArrow('xcontest')}</a></th>
           <th></th>
         </tr>
       </thead>
@@ -110,7 +109,6 @@
             <td class="text-right">{formatDuration(f.duration_s)}</td>
             <td class="text-right">{f.max_altitude != null ? `${f.max_altitude} m` : '—'}</td>
             <td class="text-right">{formatScore(f.score_xcontest)}</td>
-            <td class="text-right">{formatScore(f.score_ffvl)}</td>
             <td><a href={`/flight/${f.id}`}>view</a></td>
           </tr>
         {/each}
