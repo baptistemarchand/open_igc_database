@@ -6,6 +6,13 @@
   const stats = $derived(data.stats);
 
   const maxCount = $derived(Math.max(1, ...stats.perYear.map((y) => y.count)));
+  /** 1,234 -> "1.2k", 14,753 -> "15k"; below 1,000 the number as is. */
+  function compact(n: number): string {
+    if (n < 1000) return String(n);
+    const k = n / 1000;
+    return `${k < 10 ? k.toFixed(1).replace(/\.0$/, '') : Math.round(k)}k`;
+  }
+
   // Flights are only counted up to the last refresh, so its year is the one that can be partial.
   const partialYear = $derived(String(new Date(stats.computedAt * 1000).getUTCFullYear()));
 </script>
@@ -49,9 +56,9 @@
   <div class="chart" role="img" aria-label="Bar chart of flights per year">
     {#each stats.perYear as y (y.year)}
       <div class="col" title="{y.year}: {y.count.toLocaleString('en')} flights">
-        <span class="count">{y.count.toLocaleString('en')}</span>
+        <span class="count">{compact(y.count)}</span>
         <div class="bar" class:partial={y.year === partialYear} style:height="{(y.count / maxCount) * 100}%"></div>
-        <span class="year">{y.year}</span>
+        <span class="year">{y.year.slice(2)}</span>
       </div>
     {/each}
   </div>
@@ -135,5 +142,18 @@
   }
   figcaption {
     margin-top: 2rem;
+  }
+  /* Too small to read on a phone; the title tooltip still carries the full values. */
+  @media (max-width: 600px) {
+    .count,
+    .year {
+      display: none;
+    }
+    .chart {
+      gap: 3px;
+    }
+    figcaption {
+      margin-top: 0.75rem;
+    }
   }
 </style>
