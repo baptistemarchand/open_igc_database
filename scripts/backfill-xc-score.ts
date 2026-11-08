@@ -13,6 +13,10 @@
  *    `WHERE score_xcontest IS NULL` with keyset paging on `id` is a range seek on
  *    `idx_flights_score_xcontest_id`: it reads only the unscored rows. Both columns are
  *    always written together, so one of them is enough to find the gap.
+ *  - Suspicious flights (`suspicious IS NOT NULL`) are never scored: their glitches
+ *    (teleporting fixes, clock jumps) make the score meaningless, and they are excluded
+ *    from /stats anyway. They stay NULL; if `backfill-suspicious.ts` later clears the
+ *    flag, the next run picks them up on its own.
  *  - Results are written as they come, not at the end: a first full pass runs for hours,
  *    and a crash must not lose what was already solved. Resume is just re-running.
  *  - `<dir>` is optional. Without it every target is fetched from R2, which is what a
@@ -150,7 +154,7 @@ function parseArgs(argv: string[]): Args {
 /** Keyset paging, not OFFSET: OFFSET re-walks every skipped row on each page. */
 async function fetchTargets(creds: Creds, rescore: boolean): Promise<string[]> {
   const ids: string[] = [];
-  const where = rescore ? 'id > ?' : 'score_xcontest IS NULL AND id > ?';
+  const where = `suspicious IS NULL AND ${rescore ? '' : 'score_xcontest IS NULL AND '}id > ?`;
   for (let after = ''; ;) {
     const page = await d1Query<{ id: string }>(
       creds,
@@ -299,7 +303,9 @@ async function main() {
     fail('Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID (env or scripts/import.env).');
   const creds: Creds = { token, accountId };
 
-  console.log(args.rescore ? 'Fetching every flight id…' : 'Fetching unscored flight ids…');
+  console.log(
+    args.rescore ? 'Fetching every non-suspicious flight id…' : 'Fetching unscored, non-suspicious flight ids…',
+  );
   const targets = new Set(await fetchTargets(creds, args.rescore));
   console.log(`${targets.size} flight(s) to score.`);
   if (targets.size === 0) return;

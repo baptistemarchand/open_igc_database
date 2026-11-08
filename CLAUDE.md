@@ -165,8 +165,10 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   - Options are `trim: true` (auto launch/landing, ignores ground time) and a per-rule
     time budget; on timeout the best score found is stored, with no "optimal" flag. A
     track with no detected flight stores 0, so it isn't retried on every run.
-  - The target set is `WHERE score_xcontest IS NULL` with keyset paging on `id`: a range
-    seek on `idx_flights_score_xcontest_id`, so a periodic run reads only unscored rows.
+  - The target set is `WHERE suspicious IS NULL AND score_xcontest IS NULL` with keyset
+    paging on `id`: a range seek on `idx_flights_score_xcontest_id`, so a periodic run
+    reads only unscored rows. **Suspicious flights are never scored** (a glitchy track
+    gives a meaningless score) and stay NULL; clearing a flag makes them targets again.
     Without `<dir>` the script fetches targets from R2, which is the right mode once the
     corpus has had its first full pass. Results are written as they come (hours for a
     full pass), so resume is re-running.
