@@ -1,6 +1,7 @@
 import type { D1Database, R2Bucket } from '@cloudflare/workers-types';
 import { getFlight, upsertFlight, type Flight } from '$lib/db';
 import { checkClaimedMetadata, extractMetadata, stripIdentifyingHeaders, type ExtractResult } from '$lib/igc';
+import { suspiciousFlags } from '$lib/suspicious';
 import { gunzipCapped, gzip, isGzip } from '$lib/gzip';
 
 export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — IGC files are small
@@ -94,6 +95,7 @@ export async function ingestIgc(env: IngestEnv, body: ArrayBuffer, opts: IngestO
     pilot_name: opts.anonymous ? 'Anonymous' : parsed.meta.pilot_name,
     size_bytes: storeBuf.byteLength,
     uploaded_at: opts.uploadedAt,
+    suspicious: suspiciousFlags(parsed.meta),
   };
   await upsertFlight(env.DB, flight);
 

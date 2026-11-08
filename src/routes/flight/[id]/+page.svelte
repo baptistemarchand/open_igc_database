@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { PageProps } from './$types';
+  import { suspiciousReasons } from '$lib/suspicious';
   import { formatDuration, formatCoord, formatBytes, formatEpochDate, formatHour } from '$lib/format';
 
   let { data }: PageProps = $props();
   const f = $derived(data.flight);
+  const reasons = $derived(suspiciousReasons(f.suspicious));
 
   let mapEl: HTMLDivElement | undefined = $state();
   // Optimistically show the map box; hidden if the track can't be fetched/parsed.
@@ -71,6 +73,17 @@
 <svelte:head>
   <title>Flight {f.flight_date}{f.pilot_name ? ` — ${f.pilot_name}` : ''} — Open IGC Database</title>
 </svelte:head>
+
+{#if reasons.length}
+  <div class="mb-4 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900" role="alert">
+    <p class="font-medium">This flight's data looks suspicious and is excluded from the stats.</p>
+    <ul class="mt-1 list-disc pl-5">
+      {#each reasons as reason (reason)}
+        <li>{reason}</li>
+      {/each}
+    </ul>
+  </div>
+{/if}
 
 <p class="text-sm"><a href="/browse">← Back to browse</a></p>
 

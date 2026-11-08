@@ -6,6 +6,8 @@ export interface Flight extends FlightMetadata {
   id: string;
   size_bytes: number;
   uploaded_at: number;
+  /** Bitmask of SUSPICIOUS reasons (src/lib/suspicious.ts); null for a normal flight. */
+  suspicious: number | null;
 }
 
 /**
@@ -20,8 +22,8 @@ export async function upsertFlight(db: D1Database, f: Flight): Promise<void> {
       `INSERT INTO flights
          (id, flight_date, pilot_name, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
           duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at,
-          takeoff_hour, takeoff_tz)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          takeoff_hour, takeoff_tz, suspicious)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          flight_date = excluded.flight_date,
          pilot_name = excluded.pilot_name,
@@ -36,7 +38,8 @@ export async function upsertFlight(db: D1Database, f: Flight): Promise<void> {
          size_bytes = excluded.size_bytes,
          uploaded_at = excluded.uploaded_at,
          takeoff_hour = excluded.takeoff_hour,
-         takeoff_tz = excluded.takeoff_tz`,
+         takeoff_tz = excluded.takeoff_tz,
+         suspicious = excluded.suspicious`,
     )
     .bind(
       f.id,
@@ -54,6 +57,7 @@ export async function upsertFlight(db: D1Database, f: Flight): Promise<void> {
       f.uploaded_at,
       f.takeoff_hour,
       f.takeoff_tz,
+      f.suspicious,
     )
     .run();
 }
@@ -152,6 +156,8 @@ export const FLIGHT_COLUMNS = [
   // last to keep this list in real schema order — not grouped with takeoff_lat/lon.
   'takeoff_hour',
   'takeoff_tz',
+  // Added by migration 0006.
+  'suspicious',
 ] as const satisfies readonly (keyof Flight)[];
 
 export type FlightColumn = (typeof FLIGHT_COLUMNS)[number];

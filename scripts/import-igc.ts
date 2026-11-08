@@ -27,13 +27,14 @@
 import { readFile } from 'node:fs/promises';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { extractMetadata, stripIdentifyingHeaders, type FlightMetadata } from '../src/lib/igc.ts';
+import { suspiciousFlags } from '../src/lib/suspicious.ts';
 import { D1_DATABASE_ID, R2_BUCKET, loadEnvFile, d1Query, r2PutGzip, runPool, type Creds } from './lib/cf-api.ts';
 import { sha256Hex, findIgcFiles } from './lib/local-igc.ts';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // keep in sync with src/lib/upload.ts
 
 // --- Types ---------------------------------------------------------------------
-type Flight = FlightMetadata & { id: string; size_bytes: number; uploaded_at: number };
+type Flight = FlightMetadata & { id: string; size_bytes: number; uploaded_at: number; suspicious: number | null };
 
 interface Args {
   dir: string;
@@ -79,8 +80,8 @@ function fail(msg: string): never {
 const UPSERT_SQL = `INSERT INTO flights
     (id, flight_date, pilot_name, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
      duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at,
-     takeoff_hour, takeoff_tz)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     takeoff_hour, takeoff_tz, suspicious)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     flight_date = excluded.flight_date,
     pilot_name = excluded.pilot_name,
@@ -95,7 +96,8 @@ const UPSERT_SQL = `INSERT INTO flights
     size_bytes = excluded.size_bytes,
     uploaded_at = excluded.uploaded_at,
     takeoff_hour = excluded.takeoff_hour,
-    takeoff_tz = excluded.takeoff_tz`;
+    takeoff_tz = excluded.takeoff_tz,
+    suspicious = excluded.suspicious`;
 
 const upsertParams = (f: Flight): unknown[] => [
   f.id,
@@ -113,6 +115,7 @@ const upsertParams = (f: Flight): unknown[] => [
   f.uploaded_at,
   f.takeoff_hour,
   f.takeoff_tz,
+  f.suspicious,
 ];
 
 // --- Main ----------------------------------------------------------------------
@@ -192,6 +195,7 @@ async function main() {
         pilot_name: anonymous ? 'Anonymous' : parsed.meta.pilot_name,
         size_bytes,
         uploaded_at: uploadedAt,
+        suspicious: suspiciousFlags(parsed.meta),
       };
 
       if (!args.dryRun) {
