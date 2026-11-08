@@ -34,7 +34,7 @@ import { sha256Hex, findIgcFiles } from './lib/local-igc.ts';
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // keep in sync with src/lib/upload.ts
 
 // --- Types ---------------------------------------------------------------------
-type Flight = FlightMetadata & { id: string; size_bytes: number; uploaded_at: number; suspicious: number | null };
+type Flight = FlightMetadata & { id: string; size_bytes: number; uploaded_at: number };
 
 interface Args {
   dir: string;

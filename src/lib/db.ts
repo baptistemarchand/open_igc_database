@@ -6,8 +6,6 @@ export interface Flight extends FlightMetadata {
   id: string;
   size_bytes: number;
   uploaded_at: number;
-  /** Bitmask of SUSPICIOUS reasons (src/lib/suspicious.ts); null for a normal flight. */
-  suspicious: number | null;
 }
 
 /**

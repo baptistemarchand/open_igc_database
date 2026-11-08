@@ -14,6 +14,7 @@
     "format:check": "prettier --check .",
     "import:igc": "tsx scripts/import-igc.ts",
     "backfill:takeoff": "tsx scripts/backfill-takeoff-time.ts",
+    "backfill:suspicious": "tsx scripts/backfill-suspicious.ts",
     "stats:local": "wrangler d1 execute open-igc-db --local --file scripts/compute-stats.sql",
     "stats:remote": "wrangler d1 execute open-igc-db --remote --file scripts/compute-stats.sql"
   },

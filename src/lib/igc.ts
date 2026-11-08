@@ -2,6 +2,7 @@ import IGCParser from 'igc-parser';
 import tzlookup from 'tz-lookup';
 
 // Lives in its own module so the browser can strip headers without bundling the parser.
+import { suspiciousFlags, trackFlags } from './suspicious';
 export { stripIdentifyingHeaders } from './anonymize';
 
 /** Metadata extracted from an IGC file, ready to insert into D1 (minus id/size/uploaded_at). */
@@ -18,6 +19,8 @@ export interface FlightMetadata {
   max_altitude: number | null;
   point_count: number;
   glider_type: string | null;
+  /** Bitmask from src/lib/suspicious.ts, null when nothing is suspicious. */
+  suspicious: number | null;
 }
 
 export type ExtractResult = { ok: true; meta: FlightMetadata } | { ok: false; error: string };
@@ -70,6 +73,8 @@ export function checkClaimedMetadata(raw: unknown): FlightMetadata | null {
   if (m.takeoff_hour !== null && !int(m.takeoff_hour, 0, 23)) return null;
   if (m.takeoff_tz !== null && !(typeof m.takeoff_tz === 'string' && IANA_ZONE.test(m.takeoff_tz))) return null;
   if (!text(m.pilot_name) || !text(m.glider_type)) return null;
+  // Absent from pages built before the field existed, so missing means "none".
+  if (m.suspicious != null && !int(m.suspicious, 0, 2 ** 30)) return null;
 
   // Rebuilt field by field so unknown keys never reach the INSERT.
   return {
@@ -85,6 +90,7 @@ export function checkClaimedMetadata(raw: unknown): FlightMetadata | null {
     max_altitude: m.max_altitude as number | null,
     point_count: m.point_count as number,
     glider_type: m.glider_type as string | null,
+    suspicious: (m.suspicious as number | undefined) ?? null,
   };
 }
 
@@ -156,6 +162,11 @@ export function extractMetadata(text: string): ExtractResult {
   const h = Number(hourPart);
   const takeoff_hour = Number.isInteger(h) && h >= 0 && h <= 23 ? h : null;
 
+  const track = trackFlags(
+    valid.map((f) => ({ timestamp: f.timestamp, altitude: f.gpsAltitude ?? f.pressureAltitude })),
+  );
+  const rounded_max = max_altitude == null ? null : Math.round(max_altitude);
+
   return {
     ok: true,
     meta: {
@@ -168,9 +179,10 @@ export function extractMetadata(text: string): ExtractResult {
       landing_lat: last.latitude,
       landing_lon: last.longitude,
       duration_s,
-      max_altitude: max_altitude == null ? null : Math.round(max_altitude),
+      max_altitude: rounded_max,
       point_count: parsed.fixes.length,
       glider_type: parsed.gliderType?.trim() || null,
+      suspicious: suspiciousFlags({ duration_s, max_altitude: rounded_max, suspicious: track }),
     },
   };
 }

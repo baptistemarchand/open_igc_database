@@ -130,6 +130,20 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   read time (`getStats`), so a relabel shows up without a recompute. `getStats` throws if
   the row is missing, same policy as `getFlightCount`. Values are raw maxima: no outlier
   filtering, so a GPS glitch would own "highest"/"longest" until fixed in the data.
+- **`suspicious` is a bitmask of glitch reasons, NULL for normal flights** (bits in
+  `src/lib/suspicious.ts`, never renumbered). `/stats` excludes flagged flights and the
+  flight page shows a banner. Two kinds of bit, backfilled differently:
+  - **Threshold bits** (`ALT_TOO_HIGH`, `TOO_LONG`) are recomputed from metadata on the
+    Worker, so a client can't set them. Changing a threshold needs a new SQL migration
+    (0006 and 0007 hardcode the numbers); thresholds only went down so far, so the
+    migrations only OR bits in.
+  - **Track bits** (`ALT_SPIKE`, `BAD_TIMESTAMPS`) need the fixes, so they're computed in
+    `extractMetadata`, arrive from the upload page as trusted metadata, and are backfilled
+    by `scripts/backfill-suspicious.ts` (corpus scan, OR-merge, safe to re-run). Their
+    thresholds were picked from a full-corpus scan; see the comments in `suspicious.ts`.
+  - Fixed limits alone missed real glitches by a hair (8,915 m, 14 h 45 m), which is
+    why the track rules exist. A new rule should be checked against the whole corpus
+    before shipping, not just the examples that motivated it.
 - **Sort tiebreakers follow the sort direction** (`ORDER BY <col> ${dir}, id ${dir}`), and
   migration 0004 adds `(duration_s, id)` / `(max_altitude, id)` to go with 0002's
   `(flight_date, id)`. The indexes are the real fix — those two columns had none, so
