@@ -7,6 +7,7 @@
 
   const links = [
     { href: '/browse', label: 'Browse' },
+    { href: '/stats', label: 'Stats' },
     { href: '/upload', label: 'Upload' },
     { href: '/api', label: 'API' },
   ];

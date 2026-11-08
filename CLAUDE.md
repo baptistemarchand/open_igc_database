@@ -11,6 +11,7 @@ npm run dev                                          # vite dev, bindings via Mi
 npm run check                                         # svelte-check (typecheck) — run before done
 npm run format                                        # prettier --write
 npx wrangler d1 migrations apply open-igc-db --local  # create/refresh local D1
+npm run stats:local                                   # refresh the /stats snapshot (stats:remote for prod)
 ```
 
 There is no test suite and no lint step beyond `svelte-check` + prettier.
@@ -121,6 +122,14 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
     `COUNT(*)` — the only cause is an unapplied migration, and a silent fallback would
     restore the exact cost it exists to remove. `searchFlights` still pays a real COUNT
     when a filter is set; that one is unavoidable and is not the common case.
+- **`/stats` reads a precomputed snapshot, never live aggregates.** The `stats` table
+  (migration 0005) holds one row: flight count, the ids of the longest/highest flights,
+  and per-year counts as JSON. It is refreshed **by hand** with `scripts/compute-stats.sql`
+  (`npm run stats:remote`) — the per-year `GROUP BY` is a full date-index scan (~187k
+  reads), so it must not run per request. Record flights are stored as ids and joined at
+  read time (`getStats`), so a relabel shows up without a recompute. `getStats` throws if
+  the row is missing, same policy as `getFlightCount`. Values are raw maxima: no outlier
+  filtering, so a GPS glitch would own "highest"/"longest" until fixed in the data.
 - **Sort tiebreakers follow the sort direction** (`ORDER BY <col> ${dir}, id ${dir}`), and
   migration 0004 adds `(duration_s, id)` / `(max_altitude, id)` to go with 0002's
   `(flight_date, id)`. The indexes are the real fix — those two columns had none, so

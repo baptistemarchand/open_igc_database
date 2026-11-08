@@ -13,7 +13,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "import:igc": "tsx scripts/import-igc.ts",
-    "backfill:takeoff": "tsx scripts/backfill-takeoff-time.ts"
+    "backfill:takeoff": "tsx scripts/backfill-takeoff-time.ts",
+    "stats:local": "wrangler d1 execute open-igc-db --local --file scripts/compute-stats.sql",
+    "stats:remote": "wrangler d1 execute open-igc-db --remote --file scripts/compute-stats.sql"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260708.1",

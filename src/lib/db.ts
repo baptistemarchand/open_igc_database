@@ -84,6 +84,47 @@ export async function getFlightCount(db: D1Database): Promise<number> {
   return row.value;
 }
 
+export interface Stats {
+  computedAt: number;
+  flightCount: number;
+  longest: Flight | null;
+  highest: Flight | null;
+  /** Ascending by year; `year` is the 4-digit prefix of `flight_date`. */
+  perYear: { year: string; count: number }[];
+}
+
+/**
+ * Site statistics from the single precomputed `stats` row (migration 0005), refreshed by
+ * hand with scripts/compute-stats.sql. Cost is one row plus two primary-key lookups.
+ *
+ * Throws when the row is missing rather than computing on the fly: the per-year counts
+ * need a full index scan, which is exactly what the snapshot exists to avoid.
+ */
+export async function getStats(db: D1Database): Promise<Stats> {
+  const row = await db
+    .prepare('SELECT computed_at, flight_count, longest_id, highest_id, per_year FROM stats WHERE id = 1')
+    .first<{
+      computed_at: number;
+      flight_count: number;
+      longest_id: string | null;
+      highest_id: string | null;
+      per_year: string;
+    }>();
+  if (!row)
+    throw new Error('stats row missing — apply migration 0005, then run scripts/compute-stats.sql (see CLAUDE.md)');
+
+  const [longest, highest] = await Promise.all([
+    row.longest_id ? getFlight(db, row.longest_id) : null,
+    row.highest_id ? getFlight(db, row.highest_id) : null,
+  ]);
+
+  const perYear = (JSON.parse(row.per_year) as { year: string; count: number }[]).sort((a, b) =>
+    a.year.localeCompare(b.year),
+  );
+
+  return { computedAt: row.computed_at, flightCount: row.flight_count, longest, highest, perYear };
+}
+
 /**
  * Real D1 columns, in schema order.
  *
