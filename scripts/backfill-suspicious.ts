@@ -1,6 +1,6 @@
 /**
  * Backfill the track-derived `suspicious` bits (TRACK_BITS in src/lib/suspicious.ts:
- * ALT_SPIKE, BAD_TIMESTAMPS, TIME_GAP, GROUND_TIME). The threshold bits come from stored metadata and are
+ * ALT_SPIKE, BAD_TIMESTAMPS, TIME_GAP, GROUND_TIME, POSITION_JUMP). The threshold bits come from stored metadata and are
  * backfilled by SQL migrations; these need the track points, which only the .igc has.
  *
  * Same shape as backfill-takeoff-time.ts, which explains the choices in detail:
@@ -16,7 +16,8 @@
  * so a re-run is cheap and resuming is just running it again. Reading every row's id and
  * current flags is one paged read of ~187k rows, paid once per run.
  *
- * Run `npm run stats:remote` afterwards: /stats only changes when the snapshot does.
+ * Run `npm run backfill:xcscore` afterwards (it clears the XC scores of newly flagged
+ * flights), then `npm run stats:remote`: /stats only changes when the snapshot does.
  *
  * Usage:
  *   npx tsx scripts/backfill-suspicious.ts <dir> [--recursive] [--concurrency=8]
@@ -231,7 +232,7 @@ async function main() {
   }
 
   const all = [...resolved].map(([id, bits]) => ({ id, bits }));
-  for (const name of ['ALT_SPIKE', 'BAD_TIMESTAMPS', 'TIME_GAP', 'GROUND_TIME'] as const) {
+  for (const name of ['ALT_SPIKE', 'BAD_TIMESTAMPS', 'TIME_GAP', 'GROUND_TIME', 'POSITION_JUMP'] as const) {
     const bit = SUSPICIOUS[name];
     const now = all.filter((r) => (current.get(r.id)! & bit) !== 0).length;
     const next = all.filter((r) => (r.bits & bit) !== 0).length;
@@ -274,7 +275,9 @@ async function main() {
       }
     }
   }
-  console.log(`=== Done: ${written} row(s) updated. Now run \`npm run stats:remote\`. ===`);
+  console.log(
+    `=== Done: ${written} row(s) updated. Now run \`npm run backfill:xcscore\`, then \`npm run stats:remote\`. ===`,
+  );
   if (unresolved > 0) process.exitCode = 1;
 }
 

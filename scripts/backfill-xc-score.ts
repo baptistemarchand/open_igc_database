@@ -15,8 +15,9 @@
  *    always written together, so one of them is enough to find the gap.
  *  - Suspicious flights (`suspicious IS NOT NULL`) are never scored: their glitches
  *    (teleporting fixes, clock jumps) make the score meaningless, and they are excluded
- *    from /stats anyway. They stay NULL; if `backfill-suspicious.ts` later clears the
- *    flag, the next run picks them up on its own.
+ *    from /stats anyway. Each run first clears the scores of flagged flights, since a
+ *    flag can arrive after the score (a new rule, then `backfill-suspicious.ts`); so
+ *    run that one first. If a flag is later cleared, the next run scores the flight.
  *  - Results are written as they come, not at the end: a first full pass runs for hours,
  *    and a crash must not lose what was already solved. Resume is just re-running.
  *  - `<dir>` is optional. Without it every target is fetched from R2, which is what a
@@ -168,6 +169,31 @@ async function fetchTargets(creds: Creds, rescore: boolean): Promise<string[]> {
   }
 }
 
+// --- Flagged flights ----------------------------------------------------------------
+/**
+ * `suspicious IS NOT NULL` is the predicate of the partial index from migration 0006,
+ * so this reads only the few hundred flagged rows, not the table.
+ */
+const FLAGGED_SCORED = 'suspicious IS NOT NULL AND score_xcontest IS NOT NULL';
+
+async function clearFlaggedScores(creds: Creds, dryRun: boolean): Promise<void> {
+  if (dryRun) {
+    const [row] = await d1Query<{ n: number }>(
+      creds,
+      D1_DATABASE_ID,
+      `SELECT COUNT(*) AS n FROM flights WHERE ${FLAGGED_SCORED}`,
+    );
+    console.log(`Would clear the scores of ${row?.n ?? 0} flagged flight(s).`);
+    return;
+  }
+  const meta = await d1Exec(
+    creds,
+    D1_DATABASE_ID,
+    `UPDATE flights SET score_xcontest = NULL, score_ffvl = NULL WHERE ${FLAGGED_SCORED}`,
+  );
+  console.log(`Cleared the scores of ${meta.changes ?? 0} flagged flight(s).`);
+}
+
 // --- Writes -------------------------------------------------------------------------
 const ID_RE = /^[0-9a-f]{64}$/;
 /** No league scores in the thousands; anything outside this is a bug, not a flight. */
@@ -302,6 +328,8 @@ async function main() {
   if (!token || !accountId)
     fail('Missing CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID (env or scripts/import.env).');
   const creds: Creds = { token, accountId };
+
+  await clearFlaggedScores(creds, args.dryRun);
 
   console.log(
     args.rescore ? 'Fetching every non-suspicious flight id…' : 'Fetching unscored, non-suspicious flight ids…',

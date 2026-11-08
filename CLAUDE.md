@@ -140,7 +140,7 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
     (0006 and 0007 hardcode the numbers); thresholds only went down so far, so the
     migrations only OR bits in.
   - **Track bits** (`ALT_SPIKE`, `BAD_TIMESTAMPS`, `TIME_GAP`,
-    `GROUND_TIME`) need the fixes, so they're
+    `GROUND_TIME`, `POSITION_JUMP`) need the fixes, so they're
     computed in `extractMetadata`, arrive from the upload page as trusted metadata, and
     are backfilled by `scripts/backfill-suspicious.ts`. The backfill _replaces_ the track
     bits (a rule change can clear a flag, not only add one) and writes only rows that
@@ -170,7 +170,10 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   - The target set is `WHERE suspicious IS NULL AND score_xcontest IS NULL` with keyset
     paging on `id`: a range seek on `idx_flights_score_xcontest_id`, so a periodic run
     reads only unscored rows. **Suspicious flights are never scored** (a glitchy track
-    gives a meaningless score) and stay NULL; clearing a flag makes them targets again.
+    gives a meaningless score): each run starts by NULLing the scores of flagged flights
+    (via the 0006 partial index), because a flag can land after the score. So after a
+    new track rule, run `backfill:suspicious`, then `backfill:xcscore`, then
+    `stats:remote`. Clearing a flag makes the flight a target again.
     Without `<dir>` the script fetches targets from R2, which is the right mode once the
     corpus has had its first full pass. Results are written as they come (hours for a
     full pass), so resume is re-running.

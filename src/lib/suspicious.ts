@@ -10,6 +10,7 @@ export const SUSPICIOUS = {
   BAD_TIMESTAMPS: 8,
   TIME_GAP: 16,
   GROUND_TIME: 32,
+  POSITION_JUMP: 64,
 } as const;
 
 export type SuspiciousReason = keyof typeof SUSPICIOUS;
@@ -20,7 +21,11 @@ export type SuspiciousReason = keyof typeof SUSPICIOUS;
  * `FlightMetadata.suspicious` and get backfilled from the corpus, not by SQL.
  */
 export const TRACK_BITS =
-  SUSPICIOUS.ALT_SPIKE | SUSPICIOUS.BAD_TIMESTAMPS | SUSPICIOUS.TIME_GAP | SUSPICIOUS.GROUND_TIME;
+  SUSPICIOUS.ALT_SPIKE |
+  SUSPICIOUS.BAD_TIMESTAMPS |
+  SUSPICIOUS.TIME_GAP |
+  SUSPICIOUS.GROUND_TIME |
+  SUSPICIOUS.POSITION_JUMP;
 
 /**
  * Thresholds, set just above the all-time paragliding records (about 8,400 m altitude
@@ -82,6 +87,20 @@ const DRIVING_M = 1000;
 const GLITCH_M = 3000;
 const MIN_DRIVING_MIN = 20;
 const MIN_PARKED_MIN = 60;
+/**
+ * POSITION_JUMP: two consecutive fixes further apart than JUMP_M, at a speed no glider
+ * reaches (JUMP_SPEED_MS is 360 km/h, about three times the fastest paraglider ground
+ * speed). The case that motivated it: a logger writing 0°N 0°E before its first GPS
+ * lock, which put takeoff in the Gulf of Guinea and scored 5,145 XC points.
+ *
+ * Measured over the 186k-file corpus: the count of files barely moves between 70 m/s
+ * and 150 m/s (674 to 631 in a raw B-record scan), so real flights and glitches are well
+ * apart. At 100 m/s, 591 files are flagged, 439 of them by this rule alone. Most jumps
+ * are short (half are 2-5 km), 29 are over 1,000 km. The 2 km floor keeps a few metres
+ * of noise between fixes logged in the same second from counting as infinite speed.
+ */
+const JUMP_M = 2000;
+const JUMP_SPEED_MS = 100;
 
 /** Human-readable text for the flight page banner. */
 export const SUSPICIOUS_LABELS: Record<SuspiciousReason, string> = {
@@ -91,6 +110,7 @@ export const SUSPICIOUS_LABELS: Record<SuspiciousReason, string> = {
   BAD_TIMESTAMPS: 'Most fixes share the same timestamp, so the duration is unreliable',
   TIME_GAP: `The track has a gap of more than ${MAX_GAP_S / 60} minutes without fixes, so the duration is unreliable`,
   GROUND_TIME: 'The logger kept recording on the ground (parked or in a car), so the duration is unreliable',
+  POSITION_JUMP: `The track jumps more than ${JUMP_M / 1000} km faster than any glider can fly (a GPS glitch), so positions and the XC score are unreliable`,
 };
 
 /** One fix, as `trackFlags` needs it. `timestamp` is in ms. */
@@ -126,10 +146,11 @@ export function trackFlags(fixes: readonly TrackFix[]): number {
     }
   }
 
-  // Both need elapsed time; with a stuck clock they would misread everything.
+  // All need elapsed time; with a stuck clock they would misread everything.
   if (!(flags & SUSPICIOUS.BAD_TIMESTAMPS)) {
     if (altitudeSpike(fixes)) flags |= SUSPICIOUS.ALT_SPIKE;
     if (groundTime(fixes)) flags |= SUSPICIOUS.GROUND_TIME;
+    if (positionJump(fixes)) flags |= SUSPICIOUS.POSITION_JUMP;
   }
 
   return flags;
@@ -143,6 +164,18 @@ function distanceM(la1: number, lo1: number, la2: number, lo2: number): number {
   const h =
     Math.sin(((la2 - la1) * r) / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(((lo2 - lo1) * r) / 2) ** 2;
   return 12_742_000 * Math.asin(Math.sqrt(h));
+}
+
+function positionJump(fixes: readonly TrackFix[]): boolean {
+  for (let i = 1; i < fixes.length; i++) {
+    const [a, b] = [fixes[i - 1], fixes[i]];
+    const d = distanceM(a.latitude, a.longitude, b.latitude, b.longitude);
+    if (d <= JUMP_M) continue;
+    // A jump within the same timestamp is infinitely fast.
+    const dt = (b.timestamp - a.timestamp) / 1000;
+    if (dt <= 0 || d / dt > JUMP_SPEED_MS) return true;
+  }
+  return false;
 }
 
 function groundTime(fixes: readonly TrackFix[]): boolean {
