@@ -1,6 +1,6 @@
 /**
  * Backfill the track-derived `suspicious` bits (TRACK_BITS in src/lib/suspicious.ts:
- * ALT_SPIKE, BAD_TIMESTAMPS). The threshold bits come from stored metadata and are
+ * ALT_SPIKE, BAD_TIMESTAMPS, TIME_GAP). The threshold bits come from stored metadata and are
  * backfilled by SQL migrations; these need the track points, which only the .igc has.
  *
  * Same shape as backfill-takeoff-time.ts, which explains the choices in detail:
@@ -10,9 +10,11 @@
  *  - fold 500 rows into one `WITH v(...) AS (VALUES ...) UPDATE ... FROM v`, with
  *    every inlined literal validated first (see `d1Exec`).
  *
- * Only flagged flights are written, and the bits are OR-ed in, so a re-run is harmless
- * and resuming after an interruption is just running it again. Finding the rows with no
- * local file needs every id in D1: one paged read of ~187k rows, paid once per run.
+ * The track bits are *replaced*, not OR-ed in: a rule can get stricter or looser (ALT_SPIKE
+ * went from a median filter to a speed gate), so a stale bit has to be cleared too. The
+ * threshold bits are left alone. Only rows whose track bits actually change are written,
+ * so a re-run is cheap and resuming is just running it again. Reading every row's id and
+ * current flags is one paged read of ~187k rows, paid once per run.
  *
  * Run `npm run stats:remote` afterwards: /stats only changes when the snapshot does.
  *
@@ -156,18 +158,18 @@ async function scanCorpus(args: Args): Promise<Map<string, number>> {
   return map;
 }
 
-// --- Phase B: D1 ids with no local file -------------------------------------------
-async function fetchAllIds(creds: Creds): Promise<string[]> {
-  const ids: string[] = [];
+// --- Phase B: every D1 row and its current flags ----------------------------------
+async function fetchAllFlags(creds: Creds): Promise<Map<string, number>> {
+  const current = new Map<string, number>();
   for (let offset = 0; ; offset += D1_PAGE_SIZE) {
-    const page = await d1Query<{ id: string }>(
+    const page = await d1Query<{ id: string; suspicious: number | null }>(
       creds,
       D1_DATABASE_ID,
-      'SELECT id FROM flights ORDER BY id LIMIT ? OFFSET ?',
+      'SELECT id, suspicious FROM flights ORDER BY id LIMIT ? OFFSET ?',
       [D1_PAGE_SIZE, offset],
     );
-    ids.push(...page.map((r) => r.id));
-    if (page.length < D1_PAGE_SIZE) return ids;
+    for (const r of page) current.set(r.id, r.suspicious ?? 0);
+    if (page.length < D1_PAGE_SIZE) return current;
   }
 }
 
@@ -176,11 +178,13 @@ const ID_RE = /^[0-9a-f]{64}$/;
 
 function chunkSql(rows: Scanned[]): string {
   // Both values validated before inlining: the id against a strict hex pattern, the
-  // bits as a non-zero integer inside TRACK_BITS (see the filter in main).
+  // bits as an integer inside TRACK_BITS (see the filter in main). NULLIF keeps a row
+  // whose last bit was cleared at NULL, the "normal flight" value.
   const tuples = rows.map((r) => `('${r.id}',${r.bits})`).join(',');
   return (
     `WITH v(id, bits) AS (VALUES ${tuples})\n` +
-    'UPDATE flights SET suspicious = COALESCE(flights.suspicious, 0) | v.bits FROM v WHERE flights.id = v.id'
+    `UPDATE flights SET suspicious = NULLIF((COALESCE(flights.suspicious, 0) & ~${TRACK_BITS}) | v.bits, 0) ` +
+    'FROM v WHERE flights.id = v.id'
   );
 }
 
@@ -195,15 +199,17 @@ async function main() {
 
   const local = await scanCorpus(args);
 
-  console.log('Fetching every flight id from prod D1…');
-  const ids = await fetchAllIds(creds);
+  console.log('Fetching every flight id and its flags from prod D1…');
+  const current = await fetchAllFlags(creds);
+  const ids = [...current.keys()];
   const misses = ids.filter((id) => !local.has(id));
   console.log(`${ids.length} flight(s) in D1, ${misses.length} with no local file.`);
 
-  const flagged = new Map<string, number>();
+  // New track bits for every flight we could read, 0 included: 0 is what clears a stale bit.
+  const resolved = new Map<string, number>();
   for (const id of ids) {
     const bits = local.get(id);
-    if (bits) flagged.set(id, bits);
+    if (bits !== undefined) resolved.set(id, bits);
   }
 
   let unresolved = 0;
@@ -214,8 +220,7 @@ async function main() {
         const obj = await r2Get(creds, R2_BUCKET, `${id}.igc`);
         const res = obj && extractMetadata(new TextDecoder().decode(obj.body));
         if (res && res.ok) {
-          const bits = (res.meta.suspicious ?? 0) & TRACK_BITS;
-          if (bits) flagged.set(id, bits);
+          resolved.set(id, (res.meta.suspicious ?? 0) & TRACK_BITS);
           return;
         }
       } catch (e) {
@@ -225,14 +230,22 @@ async function main() {
     });
   }
 
-  const rows = [...flagged]
-    .map(([id, bits]) => ({ id, bits }))
-    .filter((r) => ID_RE.test(r.id) && Number.isInteger(r.bits));
-  const count = (bit: number) => rows.filter((r) => r.bits & bit).length;
-  console.log(
-    `\n${rows.length} flight(s) to flag: ALT_SPIKE ${count(SUSPICIOUS.ALT_SPIKE)}, ` +
-      `BAD_TIMESTAMPS ${count(SUSPICIOUS.BAD_TIMESTAMPS)}; ${unresolved} unresolved.`,
+  const all = [...resolved].map(([id, bits]) => ({ id, bits }));
+  for (const name of ['ALT_SPIKE', 'BAD_TIMESTAMPS', 'TIME_GAP'] as const) {
+    const bit = SUSPICIOUS[name];
+    const now = all.filter((r) => (current.get(r.id)! & bit) !== 0).length;
+    const next = all.filter((r) => (r.bits & bit) !== 0).length;
+    console.log(`  ${name.padEnd(15)} ${now} -> ${next}`);
+  }
+  // Unresolved rows keep whatever they have: no file means no evidence either way.
+  const rows = all.filter(
+    (r) =>
+      (current.get(r.id)! & TRACK_BITS) !== r.bits &&
+      ID_RE.test(r.id) &&
+      Number.isInteger(r.bits) &&
+      (r.bits & ~TRACK_BITS) === 0,
   );
+  console.log(`\n${rows.length} flight(s) whose track bits change; ${unresolved} unresolved.`);
 
   const chunks: Scanned[][] = [];
   for (let i = 0; i < rows.length; i += CHUNK_ROWS) chunks.push(rows.slice(i, i + CHUNK_ROWS));

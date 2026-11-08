@@ -137,10 +137,12 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
     Worker, so a client can't set them. Changing a threshold needs a new SQL migration
     (0006 and 0007 hardcode the numbers); thresholds only went down so far, so the
     migrations only OR bits in.
-  - **Track bits** (`ALT_SPIKE`, `BAD_TIMESTAMPS`) need the fixes, so they're computed in
-    `extractMetadata`, arrive from the upload page as trusted metadata, and are backfilled
-    by `scripts/backfill-suspicious.ts` (corpus scan, OR-merge, safe to re-run). Their
-    thresholds were picked from a full-corpus scan; see the comments in `suspicious.ts`.
+  - **Track bits** (`ALT_SPIKE`, `BAD_TIMESTAMPS`, `TIME_GAP`) need the fixes, so they're
+    computed in `extractMetadata`, arrive from the upload page as trusted metadata, and
+    are backfilled by `scripts/backfill-suspicious.ts`. The backfill _replaces_ the track
+    bits (a rule change can clear a flag, not only add one) and writes only rows that
+    change, so re-run it after any change to `trackFlags`. Thresholds were picked from
+    full-corpus scans; see the comments in `suspicious.ts`.
   - Fixed limits alone missed real glitches by a hair (8,915 m, 14 h 45 m), which is
     why the track rules exist. A new rule should be checked against the whole corpus
     before shipping, not just the examples that motivated it.
