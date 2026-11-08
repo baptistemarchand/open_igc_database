@@ -163,7 +163,12 @@ export function extractMetadata(text: string): ExtractResult {
   const takeoff_hour = Number.isInteger(h) && h >= 0 && h <= 23 ? h : null;
 
   const track = trackFlags(
-    valid.map((f) => ({ timestamp: f.timestamp, altitude: f.gpsAltitude ?? f.pressureAltitude })),
+    valid.map((f) => ({
+      timestamp: f.timestamp,
+      altitude: f.gpsAltitude ?? f.pressureAltitude,
+      latitude: f.latitude,
+      longitude: f.longitude,
+    })),
   );
   const rounded_max = max_altitude == null ? null : Math.round(max_altitude);
 

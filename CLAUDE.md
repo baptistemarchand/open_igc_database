@@ -137,7 +137,8 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
     Worker, so a client can't set them. Changing a threshold needs a new SQL migration
     (0006 and 0007 hardcode the numbers); thresholds only went down so far, so the
     migrations only OR bits in.
-  - **Track bits** (`ALT_SPIKE`, `BAD_TIMESTAMPS`, `TIME_GAP`) need the fixes, so they're
+  - **Track bits** (`ALT_SPIKE`, `BAD_TIMESTAMPS`, `TIME_GAP`,
+    `GROUND_TIME`) need the fixes, so they're
     computed in `extractMetadata`, arrive from the upload page as trusted metadata, and
     are backfilled by `scripts/backfill-suspicious.ts`. The backfill _replaces_ the track
     bits (a rule change can clear a flag, not only add one) and writes only rows that

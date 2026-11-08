@@ -9,6 +9,7 @@ export const SUSPICIOUS = {
   ALT_SPIKE: 4,
   BAD_TIMESTAMPS: 8,
   TIME_GAP: 16,
+  GROUND_TIME: 32,
 } as const;
 
 export type SuspiciousReason = keyof typeof SUSPICIOUS;
@@ -18,7 +19,8 @@ export type SuspiciousReason = keyof typeof SUSPICIOUS;
  * anywhere, but these exist only where the file was parsed, so they travel inside
  * `FlightMetadata.suspicious` and get backfilled from the corpus, not by SQL.
  */
-export const TRACK_BITS = SUSPICIOUS.ALT_SPIKE | SUSPICIOUS.BAD_TIMESTAMPS | SUSPICIOUS.TIME_GAP;
+export const TRACK_BITS =
+  SUSPICIOUS.ALT_SPIKE | SUSPICIOUS.BAD_TIMESTAMPS | SUSPICIOUS.TIME_GAP | SUSPICIOUS.GROUND_TIME;
 
 /**
  * Thresholds, set just above the all-time paragliding records (about 8,400 m altitude
@@ -60,6 +62,26 @@ const MAX_GAP_S = 30 * 60;
  */
 const MAX_SAME_TIMESTAMP_SHARE = 0.2;
 const MIN_SAME_TIMESTAMP_FIXES = 10;
+/**
+ * GROUND_TIME: the logger kept recording on the ground, parked or in a car, which
+ * inflates the duration. Fixes are reduced to per-minute medians; a minute is "level"
+ * when its altitude moved less than LEVEL_M from the previous minute's. A level minute
+ * is parked if it also moved less than PARKED_M, and driving if it covered more than
+ * DRIVING_M (60 km/h) but less than a position glitch would.
+ *
+ * Each signal alone failed on the corpus: level altitude also fits dune and ridge
+ * soaring, and a 10-min fast stretch also fits competition wings gliding in lift. Level
+ * *and* parked, or level *and* fast for many minutes, did separate. Measured: 182k files
+ * have no driving minute, and real 8-11 h cross-country flights reach 6-20 (fast level
+ * glides), hence the 20 floor; the car ride that motivated this had 107. Parked over an
+ * hour is 385 files, flights with an hour or more of ground time before or after.
+ */
+const LEVEL_M = 15;
+const PARKED_M = 50;
+const DRIVING_M = 1000;
+const GLITCH_M = 3000;
+const MIN_DRIVING_MIN = 20;
+const MIN_PARKED_MIN = 60;
 
 /** Human-readable text for the flight page banner. */
 export const SUSPICIOUS_LABELS: Record<SuspiciousReason, string> = {
@@ -68,14 +90,23 @@ export const SUSPICIOUS_LABELS: Record<SuspiciousReason, string> = {
   ALT_SPIKE: 'Max altitude comes from a GPS glitch no glider could climb to',
   BAD_TIMESTAMPS: 'Most fixes share the same timestamp, so the duration is unreliable',
   TIME_GAP: `The track has a gap of more than ${MAX_GAP_S / 60} minutes without fixes, so the duration is unreliable`,
+  GROUND_TIME: 'The logger kept recording on the ground (parked or in a car), so the duration is unreliable',
 };
+
+/** One fix, as `trackFlags` needs it. `timestamp` is in ms. */
+export interface TrackFix {
+  timestamp: number;
+  altitude: number | null;
+  latitude: number;
+  longitude: number;
+}
 
 /**
  * The track-derived bits (TRACK_BITS only), 0 when none apply. `timestamp` is in ms, as
  * igc-parser gives it: already monotonic across midnight, which is what makes a 12-hour
  * clock show up as a gap.
  */
-export function trackFlags(fixes: readonly { timestamp: number; altitude: number | null }[]): number {
+export function trackFlags(fixes: readonly TrackFix[]): number {
   let flags = 0;
 
   const counts = new Map<number, number>();
@@ -95,14 +126,58 @@ export function trackFlags(fixes: readonly { timestamp: number; altitude: number
     }
   }
 
-  // The gate needs elapsed time; with a stuck clock it would reject everything.
-  if (!(flags & SUSPICIOUS.BAD_TIMESTAMPS) && altitudeSpike(fixes)) flags |= SUSPICIOUS.ALT_SPIKE;
+  // Both need elapsed time; with a stuck clock they would misread everything.
+  if (!(flags & SUSPICIOUS.BAD_TIMESTAMPS)) {
+    if (altitudeSpike(fixes)) flags |= SUSPICIOUS.ALT_SPIKE;
+    if (groundTime(fixes)) flags |= SUSPICIOUS.GROUND_TIME;
+  }
 
   return flags;
 }
 
-function altitudeSpike(fixes: readonly { timestamp: number; altitude: number | null }[]): boolean {
-  const pts = fixes.filter((f): f is { timestamp: number; altitude: number } => f.altitude != null);
+const median = (xs: number[]) => xs.sort((a, b) => a - b)[xs.length >> 1];
+
+/** Great-circle distance in metres. */
+function distanceM(la1: number, lo1: number, la2: number, lo2: number): number {
+  const r = Math.PI / 180;
+  const h =
+    Math.sin(((la2 - la1) * r) / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(((lo2 - lo1) * r) / 2) ** 2;
+  return 12_742_000 * Math.asin(Math.sqrt(h));
+}
+
+function groundTime(fixes: readonly TrackFix[]): boolean {
+  const pts = fixes.filter((f) => f.altitude != null);
+  if (pts.length < 5) return false;
+
+  // Medians per minute make one noisy fix irrelevant, which the raw fixes are not.
+  const t0 = pts[0].timestamp;
+  const buckets = new Map<number, { z: number[]; la: number[]; lo: number[] }>();
+  for (const p of pts) {
+    const m = Math.floor((p.timestamp - t0) / 60_000);
+    let b = buckets.get(m);
+    if (!b) buckets.set(m, (b = { z: [], la: [], lo: [] }));
+    b.z.push(p.altitude!);
+    b.la.push(p.latitude);
+    b.lo.push(p.longitude);
+  }
+  const minutes = [...buckets]
+    .sort(([a], [b]) => a - b)
+    .map(([m, b]) => ({ m, z: median(b.z), la: median(b.la), lo: median(b.lo) }));
+
+  let parked = 0;
+  let driving = 0;
+  for (let i = 1; i < minutes.length; i++) {
+    const [a, b] = [minutes[i - 1], minutes[i]];
+    if (b.m !== a.m + 1 || Math.abs(b.z - a.z) >= LEVEL_M) continue;
+    const d = distanceM(a.la, a.lo, b.la, b.lo);
+    if (d < PARKED_M) parked++;
+    else if (d > DRIVING_M && d < GLITCH_M) driving++;
+  }
+  return driving >= MIN_DRIVING_MIN || parked >= MIN_PARKED_MIN;
+}
+
+function altitudeSpike(fixes: readonly TrackFix[]): boolean {
+  const pts = fixes.filter((f): f is TrackFix & { altitude: number } => f.altitude != null);
   if (pts.length < 5) return false;
 
   const t0 = pts[0].timestamp;

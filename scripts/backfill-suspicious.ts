@@ -1,6 +1,6 @@
 /**
  * Backfill the track-derived `suspicious` bits (TRACK_BITS in src/lib/suspicious.ts:
- * ALT_SPIKE, BAD_TIMESTAMPS, TIME_GAP). The threshold bits come from stored metadata and are
+ * ALT_SPIKE, BAD_TIMESTAMPS, TIME_GAP, GROUND_TIME). The threshold bits come from stored metadata and are
  * backfilled by SQL migrations; these need the track points, which only the .igc has.
  *
  * Same shape as backfill-takeoff-time.ts, which explains the choices in detail:
@@ -231,7 +231,7 @@ async function main() {
   }
 
   const all = [...resolved].map(([id, bits]) => ({ id, bits }));
-  for (const name of ['ALT_SPIKE', 'BAD_TIMESTAMPS', 'TIME_GAP'] as const) {
+  for (const name of ['ALT_SPIKE', 'BAD_TIMESTAMPS', 'TIME_GAP', 'GROUND_TIME'] as const) {
     const bit = SUSPICIOUS[name];
     const now = all.filter((r) => (current.get(r.id)! & bit) !== 0).length;
     const next = all.filter((r) => (r.bits & bit) !== 0).length;
