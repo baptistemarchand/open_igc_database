@@ -276,7 +276,12 @@ export interface SearchResult {
   total: number;
 }
 
-/** Search + sort + paginate flights. All filters optional and combinable. */
+/**
+ * Search + sort + paginate flights for /browse. All filters optional and combinable.
+ * Suspicious flights (glitchy tracks, see src/lib/suspicious.ts) are always left out:
+ * they would top the duration, altitude and score sorts. They stay reachable by URL,
+ * and the public API still lists them.
+ */
 export async function searchFlights(db: D1Database, p: SearchParams): Promise<SearchResult> {
   const where: string[] = [];
   const args: unknown[] = [];
@@ -298,17 +303,24 @@ export async function searchFlights(db: D1Database, p: SearchParams): Promise<Se
     args.push(p.to);
   }
 
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const filtered = where.length > 0;
+  const whereSql = `WHERE ${['suspicious IS NULL', ...where].join(' AND ')}`;
   const sortCol = SORT_COLUMNS[p.sort ?? 'date'];
   const dir = p.dir === 'asc' ? 'ASC' : 'DESC';
   const limit = Math.min(Math.max(p.limit ?? 50, 1), 100);
   const offset = Math.max(p.offset ?? 0, 0);
 
-  // Only pay for a COUNT when a filter narrows the set. Unfiltered, the answer is the
-  // cached counter — see getFlightCount for why the bare COUNT(*) had to go.
+  // Only pay for a full COUNT when a filter narrows the set. Unfiltered, the answer is
+  // the cached counter (see getFlightCount for why the bare COUNT(*) had to go) minus
+  // the flagged flights, counted off the partial index from migration 0006, which holds
+  // only those few hundred rows.
   let total: number;
-  if (where.length === 0) {
-    total = await getFlightCount(db);
+  if (!filtered) {
+    const [all, flagged] = await Promise.all([
+      getFlightCount(db),
+      db.prepare('SELECT COUNT(*) AS n FROM flights WHERE suspicious IS NOT NULL').first<{ n: number }>(),
+    ]);
+    total = all - (flagged?.n ?? 0);
   } else {
     const totalRow = await db
       .prepare(`SELECT COUNT(*) AS n FROM flights ${whereSql}`)

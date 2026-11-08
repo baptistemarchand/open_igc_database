@@ -131,8 +131,10 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   the row is missing, same policy as `getFlightCount`. Values are raw maxima: no outlier
   filtering, so a GPS glitch would own "highest"/"longest" until fixed in the data.
 - **`suspicious` is a bitmask of glitch reasons, NULL for normal flights** (bits in
-  `src/lib/suspicious.ts`, never renumbered). `/stats` excludes flagged flights and the
-  flight page shows a banner. Two kinds of bit, backfilled differently:
+  `src/lib/suspicious.ts`, never renumbered). `/stats` and `/browse` exclude flagged flights
+  (browse subtracts a count over the 0006 partial index from the cached total, so it
+  stays cheap), the flight page shows a banner, and the API still lists them. Two kinds
+  of bit, backfilled differently:
   - **Threshold bits** (`ALT_TOO_HIGH`, `TOO_LONG`) are recomputed from metadata on the
     Worker, so a client can't set them. Changing a threshold needs a new SQL migration
     (0006 and 0007 hardcode the numbers); thresholds only went down so far, so the
