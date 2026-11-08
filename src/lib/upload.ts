@@ -1,5 +1,5 @@
 import type { D1Database, R2Bucket } from '@cloudflare/workers-types';
-import { getFlight, upsertFlight, type Flight } from '$lib/db';
+import { getFlight, upsertFlight, type NewFlight } from '$lib/db';
 import { checkClaimedMetadata, extractMetadata, stripIdentifyingHeaders, type ExtractResult } from '$lib/igc';
 import { suspiciousFlags } from '$lib/suspicious';
 import { gunzipCapped, gzip, isGzip } from '$lib/gzip';
@@ -31,7 +31,8 @@ export interface IngestOptions {
   claimedMetadata?: unknown;
 }
 
-export type IngestResult = { ok: true; status: 'added' | 'duplicate'; flight: Flight } | { ok: false; error: string };
+export type IngestResult =
+  { ok: true; status: 'added' | 'duplicate'; flight: NewFlight } | { ok: false; error: string };
 
 /**
  * Ingest a single raw IGC file: validate it, store the bytes in R2 and upsert the
@@ -89,7 +90,7 @@ export async function ingestIgc(env: IngestEnv, body: ArrayBuffer, opts: IngestO
   });
 
   const existed = (await getFlight(env.DB, id)) != null;
-  const flight: Flight = {
+  const flight: NewFlight = {
     id,
     ...parsed.meta,
     pilot_name: opts.anonymous ? 'Anonymous' : parsed.meta.pilot_name,

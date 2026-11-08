@@ -147,6 +147,29 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   - Fixed limits alone missed real glitches by a hair (8,915 m, 14 h 45 m), which is
     why the track rules exist. A new rule should be checked against the whole corpus
     before shipping, not just the examples that motivated it.
+- **XC scores (`score_xcontest`, `score_ffvl`) come only from the offline backfill**
+  (`scripts/backfill-xc-score.ts`, `npm run backfill:xcscore`), run by hand
+  periodically. `igc-xc-score` is a branch-and-bound solver: ~0.5 s per flight on
+  average over a corpus sample, several seconds for some, minutes in the worst case. That
+  rules out the Worker _and_ the upload page, so:
+  - NULL means "not scored yet", not "no score". New uploads stay NULL until the next run.
+  - `upsertFlight` takes a `NewFlight` and never names the score columns, so a re-upload
+    (same id = same track) keeps its scores. Don't add them to the upsert or to
+    `FlightMetadata`/`checkClaimedMetadata`: a client must not be able to claim a score.
+  - The dependency is a **devDependency** used only by `scripts/lib/xcscore.ts`. Nothing
+    under `src/` may import it (it's LGPL and heavy; check with `npm run build` and a
+    grep for `flatbush` in `.svelte-kit/`).
+  - The solver keeps module-level state (`geom.init`, a swapped `Point.prototype`
+    distance), so scorings must not interleave in one thread; parallelism is
+    `worker_threads`.
+  - Options are `trim: true` (auto launch/landing, ignores ground time) and a per-rule
+    time budget; on timeout the best score found is stored, with no "optimal" flag. A
+    track with no detected flight stores 0, so it isn't retried on every run.
+  - The target set is `WHERE score_xcontest IS NULL` with keyset paging on `id`: a range
+    seek on `idx_flights_score_xcontest_id`, so a periodic run reads only unscored rows.
+    Without `<dir>` the script fetches targets from R2, which is the right mode once the
+    corpus has had its first full pass. Results are written as they come (hours for a
+    full pass), so resume is re-running.
 - **Sort tiebreakers follow the sort direction** (`ORDER BY <col> ${dir}, id ${dir}`), and
   migration 0004 adds `(duration_s, id)` / `(max_altitude, id)` to go with 0002's
   `(flight_date, id)`. The indexes are the real fix — those two columns had none, so

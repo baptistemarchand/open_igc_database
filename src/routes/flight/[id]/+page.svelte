@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import type { PageProps } from './$types';
   import { suspiciousReasons } from '$lib/suspicious';
-  import { formatDuration, formatCoord, formatBytes, formatEpochDate, formatHour } from '$lib/format';
+  import { formatDuration, formatCoord, formatBytes, formatEpochDate, formatHour, formatScore } from '$lib/format';
 
   let { data }: PageProps = $props();
   const f = $derived(data.flight);
@@ -184,6 +184,8 @@
       <tr><th>Glider</th><td>{f.glider_type ?? '—'}</td></tr>
       <tr><th>Duration</th><td>{formatDuration(f.duration_s)}</td></tr>
       <tr><th>Max altitude</th><td>{f.max_altitude != null ? `${f.max_altitude} m` : '—'}</td></tr>
+      <tr><th>XContest score</th><td>{formatScore(f.score_xcontest, 'Not scored yet')}</td></tr>
+      <tr><th>FFVL score</th><td>{formatScore(f.score_ffvl, 'Not scored yet')}</td></tr>
       <tr><th>Takeoff</th><td>{formatCoord(f.takeoff_lat, f.takeoff_lon)}</td></tr>
       <tr><th>Landing</th><td>{formatCoord(f.landing_lat, f.landing_lon)}</td></tr>
       <tr><th>GPS fixes</th><td>{f.point_count.toLocaleString()}</td></tr>

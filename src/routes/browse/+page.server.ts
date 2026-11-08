@@ -3,7 +3,7 @@ import type { PageServerLoad } from './$types';
 import { searchFlights, type SortKey } from '$lib/db';
 
 const PAGE_SIZE = 50;
-const SORT_KEYS: SortKey[] = ['date', 'duration', 'altitude'];
+const SORT_KEYS: SortKey[] = ['date', 'duration', 'altitude', 'xcontest', 'ffvl'];
 
 export const load: PageServerLoad = async ({ url, platform, setHeaders }) => {
   if (!platform?.env) throw error(503, 'Database unavailable');

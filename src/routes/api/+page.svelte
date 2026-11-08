@@ -140,6 +140,17 @@ curl "{`${origin}/flights?fields=all&limit=10`}"</code
         ></tr
       >
       <tr
+        ><td><code>score_xcontest</code></td><td>number | null</td><td
+          >XC score in points under XContest rules (null until the flight has been scored, which happens periodically,
+          not at upload)</td
+        ></tr
+      >
+      <tr
+        ><td><code>score_ffvl</code></td><td>number | null</td><td
+          >XC score in points under FFVL rules (null until scored, as above)</td
+        ></tr
+      >
+      <tr
         ><td><code>url</code></td><td>string</td><td
           >Direct link to the <code>.igc</code> file (the default; see note below)</td
         ></tr
@@ -201,6 +212,8 @@ curl "{`${origin}/flights?fields=all&limit=10`}"</code
       "uploaded_at": 1718460000,
       "takeoff_hour": 14,
       "takeoff_tz": "Europe/Paris",
+      "score_xcontest": 113.61,
+      "score_ffvl": 97.88,
       "url": "https://…/a1b2c3….igc"
     }
   ],`}</code

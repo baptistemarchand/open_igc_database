@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatDuration, formatEpochDate } from '$lib/format';
+  import { formatDuration, formatEpochDate, formatScore } from '$lib/format';
   import type { PageProps } from './$types';
 
   const { data }: PageProps = $props();
@@ -46,6 +46,26 @@
       <div class="value">{stats.highest.max_altitude?.toLocaleString('en')} m</div>
       <div class="sub">
         {stats.highest.pilot_name ?? 'Unknown pilot'} · {stats.highest.flight_date}
+      </div>
+    </a>
+  {/if}
+
+  {#if stats.bestXcontest}
+    <a class="card" href="/flight/{stats.bestXcontest.id}">
+      <div class="label">Best XContest score</div>
+      <div class="value">{formatScore(stats.bestXcontest.score_xcontest)}</div>
+      <div class="sub">
+        {stats.bestXcontest.pilot_name ?? 'Unknown pilot'} · {stats.bestXcontest.flight_date}
+      </div>
+    </a>
+  {/if}
+
+  {#if stats.bestFfvl}
+    <a class="card" href="/flight/{stats.bestFfvl.id}">
+      <div class="label">Best FFVL score</div>
+      <div class="value">{formatScore(stats.bestFfvl.score_ffvl)}</div>
+      <div class="sub">
+        {stats.bestFfvl.pilot_name ?? 'Unknown pilot'} · {stats.bestFfvl.flight_date}
       </div>
     </a>
   {/if}

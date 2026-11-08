@@ -26,3 +26,8 @@ export function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/** Format an XC score in points, e.g. "113.61 pts"; `unscored` when the backfill hasn't run on it yet. */
+export function formatScore(score: number | null, unscored = '—'): string {
+  return score == null ? unscored : `${score.toFixed(2)} pts`;
+}

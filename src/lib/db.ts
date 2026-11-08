@@ -6,15 +6,25 @@ export interface Flight extends FlightMetadata {
   id: string;
   size_bytes: number;
   uploaded_at: number;
+  /** XC scores in points, NULL until scripts/backfill-xc-score.ts has run on the flight. */
+  score_xcontest: number | null;
+  score_ffvl: number | null;
 }
+
+/** A flight as an upload produces it: everything but the columns only the offline backfill writes. */
+export type NewFlight = Omit<Flight, 'score_xcontest' | 'score_ffvl'>;
 
 /**
  * Insert or refresh a flight. The id is a name-independent content hash, so a
  * conflicting id means "same flight, newer upload" — the row is overwritten
  * (latest-upload-wins), which lets an anonymous re-upload relabel a named flight
  * and vice versa. Whether the row is new is determined by the caller.
+ *
+ * The XC score columns are deliberately absent: a new row gets NULL ("not scored
+ * yet"), and a re-upload keeps the backfilled scores, which is right because the same
+ * id means the same track.
  */
-export async function upsertFlight(db: D1Database, f: Flight): Promise<void> {
+export async function upsertFlight(db: D1Database, f: NewFlight): Promise<void> {
   await db
     .prepare(
       `INSERT INTO flights
@@ -91,40 +101,58 @@ export interface Stats {
   flightCount: number;
   longest: Flight | null;
   highest: Flight | null;
+  bestXcontest: Flight | null;
+  bestFfvl: Flight | null;
   /** Ascending by year; `year` is the 4-digit prefix of `flight_date`. */
   perYear: { year: string; count: number }[];
 }
 
 /**
  * Site statistics from the single precomputed `stats` row (migration 0005), refreshed by
- * hand with scripts/compute-stats.sql. Cost is one row plus two primary-key lookups.
+ * hand with scripts/compute-stats.sql. Cost is one row plus four primary-key lookups.
  *
  * Throws when the row is missing rather than computing on the fly: the per-year counts
  * need a full index scan, which is exactly what the snapshot exists to avoid.
  */
 export async function getStats(db: D1Database): Promise<Stats> {
   const row = await db
-    .prepare('SELECT computed_at, flight_count, longest_id, highest_id, per_year FROM stats WHERE id = 1')
+    .prepare(
+      `SELECT computed_at, flight_count, longest_id, highest_id, best_xcontest_id, best_ffvl_id, per_year
+       FROM stats WHERE id = 1`,
+    )
     .first<{
       computed_at: number;
       flight_count: number;
       longest_id: string | null;
       highest_id: string | null;
+      best_xcontest_id: string | null;
+      best_ffvl_id: string | null;
       per_year: string;
     }>();
   if (!row)
     throw new Error('stats row missing — apply migration 0005, then run scripts/compute-stats.sql (see CLAUDE.md)');
 
-  const [longest, highest] = await Promise.all([
-    row.longest_id ? getFlight(db, row.longest_id) : null,
-    row.highest_id ? getFlight(db, row.highest_id) : null,
+  const byId = (id: string | null) => (id ? getFlight(db, id) : null);
+  const [longest, highest, bestXcontest, bestFfvl] = await Promise.all([
+    byId(row.longest_id),
+    byId(row.highest_id),
+    byId(row.best_xcontest_id),
+    byId(row.best_ffvl_id),
   ]);
 
   const perYear = (JSON.parse(row.per_year) as { year: string; count: number }[]).sort((a, b) =>
     a.year.localeCompare(b.year),
   );
 
-  return { computedAt: row.computed_at, flightCount: row.flight_count, longest, highest, perYear };
+  return {
+    computedAt: row.computed_at,
+    flightCount: row.flight_count,
+    longest,
+    highest,
+    bestXcontest,
+    bestFfvl,
+    perYear,
+  };
 }
 
 /**
@@ -156,6 +184,9 @@ export const FLIGHT_COLUMNS = [
   'takeoff_tz',
   // Added by migration 0006.
   'suspicious',
+  // Added by migration 0008.
+  'score_xcontest',
+  'score_ffvl',
 ] as const satisfies readonly (keyof Flight)[];
 
 export type FlightColumn = (typeof FLIGHT_COLUMNS)[number];
@@ -224,6 +255,8 @@ const SORT_COLUMNS = {
   date: 'flight_date',
   duration: 'duration_s',
   altitude: 'max_altitude',
+  xcontest: 'score_xcontest',
+  ffvl: 'score_ffvl',
 } as const;
 export type SortKey = keyof typeof SORT_COLUMNS;
 

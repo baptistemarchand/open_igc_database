@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { formatDuration } from '$lib/format';
+  import { formatDuration, formatScore } from '$lib/format';
+  import type { SortKey } from '$lib/db';
   import type { PageProps } from './$types';
 
   const { data }: PageProps = $props();
@@ -36,7 +37,7 @@
     return `?${p.toString()}`;
   }
 
-  function sortLink(key: 'date' | 'duration' | 'altitude') {
+  function sortLink(key: SortKey) {
     const dir = data.sort === key && data.dir === 'desc' ? 'asc' : 'desc';
     return link({ sort: key, dir, page: 1 });
   }
@@ -95,6 +96,8 @@
           <th>Glider</th>
           <th class="text-right!"><a href={sortLink('duration')}>Duration{sortArrow('duration')}</a></th>
           <th class="text-right!"><a href={sortLink('altitude')}>Max alt{sortArrow('altitude')}</a></th>
+          <th class="text-right!"><a href={sortLink('xcontest')}>XContest{sortArrow('xcontest')}</a></th>
+          <th class="text-right!"><a href={sortLink('ffvl')}>FFVL{sortArrow('ffvl')}</a></th>
           <th></th>
         </tr>
       </thead>
@@ -106,6 +109,8 @@
             <td>{f.glider_type ?? '—'}</td>
             <td class="text-right">{formatDuration(f.duration_s)}</td>
             <td class="text-right">{f.max_altitude != null ? `${f.max_altitude} m` : '—'}</td>
+            <td class="text-right">{formatScore(f.score_xcontest)}</td>
+            <td class="text-right">{formatScore(f.score_ffvl)}</td>
             <td><a href={`/flight/${f.id}`}>view</a></td>
           </tr>
         {/each}

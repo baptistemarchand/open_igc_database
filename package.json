@@ -15,6 +15,7 @@
     "import:igc": "tsx scripts/import-igc.ts",
     "backfill:takeoff": "tsx scripts/backfill-takeoff-time.ts",
     "backfill:suspicious": "tsx scripts/backfill-suspicious.ts",
+    "backfill:xcscore": "tsx scripts/backfill-xc-score.ts",
     "stats:local": "wrangler d1 execute open-igc-db --local --file scripts/compute-stats.sql",
     "stats:remote": "wrangler d1 execute open-igc-db --remote --file scripts/compute-stats.sql"
   },
@@ -26,6 +27,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tailwindcss/vite": "^4.3.2",
     "@types/node": "^26.1.1",
+    "igc-xc-score": "^1.8.0",
     "prettier": "3.9.5",
     "prettier-plugin-svelte": "4.1.1",
     "svelte": "^5.56.1",
