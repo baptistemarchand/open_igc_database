@@ -14,7 +14,7 @@ interface FileResult {
 export const actions: Actions = {
   default: async ({ request, platform }) => {
     if (!platform?.env) return fail(503, { error: 'Storage unavailable.' });
-    const { DB, BUCKET } = platform.env;
+    const env = platform.env;
 
     const form = await request.formData();
 
@@ -36,15 +36,20 @@ export const actions: Actions = {
         continue;
       }
       try {
-        const result = await ingestIgc({ DB, BUCKET }, await file.arrayBuffer(), {
+        const result = await ingestIgc(env, await file.arrayBuffer(), {
           anonymous,
           uploadedAt: now,
         });
         if (!result.ok) {
-          results.push({ name: file.name, status: 'error', error: result.error });
+          results.push({
+            name: file.name,
+            status: result.existingId ? 'duplicate' : 'error',
+            id: result.existingId,
+            error: result.error,
+          });
           continue;
         }
-        results.push({ name: file.name, status: result.status, id: result.flight.id });
+        results.push({ name: file.name, status: 'added', id: result.flight.id });
       } catch (e) {
         results.push({
           name: file.name,

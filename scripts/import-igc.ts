@@ -6,7 +6,9 @@
  * Parsing/validation/hashing run locally and MUST match the Worker exactly, so we
  * reuse the repo's own `extractMetadata` + `stripIdentifyingHeaders` verbatim and
  * reproduce the ingest orchestration from src/lib/upload.ts (`ingestIgc`) and the
- * upsert SQL from src/lib/db.ts (`upsertFlight`). The id is the SHA-256 of the
+ * insert SQL from src/lib/db.ts (`insertFlight`). Rows land unprocessed
+ * (`processed_at IS NULL`), and workers/processor's cron queues them for glitch checks
+ * and XC scores; nothing is enqueued from here. The id is the SHA-256 of the
  * identifier-stripped bytes, so dedup is name-independent.
  *
  * The local `.igc` files this script reads are themselves already gzip-compressed
@@ -27,7 +29,6 @@
 import { readFile } from 'node:fs/promises';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { extractMetadata, stripIdentifyingHeaders, type FlightMetadata } from '../src/lib/igc.ts';
-import { suspiciousFlags } from '../src/lib/suspicious.ts';
 import { D1_DATABASE_ID, R2_BUCKET, loadEnvFile, d1Query, r2PutGzip, runPool, type Creds } from './lib/cf-api.ts';
 import { sha256Hex, findIgcFiles } from './lib/local-igc.ts';
 
@@ -77,29 +78,16 @@ function fail(msg: string): never {
 }
 
 // --- Ingest (mirror of src/lib/upload.ts, minus the bindings) ------------------
-const UPSERT_SQL = `INSERT INTO flights
+// Ids already in D1 are skipped before this runs (see `known`); DO NOTHING keeps an
+// existing flight untouched anyway, as the app refuses re-uploads.
+const INSERT_SQL = `INSERT INTO flights
     (id, flight_date, pilot_name, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
      duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at,
-     takeoff_hour, takeoff_tz, suspicious)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(id) DO UPDATE SET
-    flight_date = excluded.flight_date,
-    pilot_name = excluded.pilot_name,
-    takeoff_lat = excluded.takeoff_lat,
-    takeoff_lon = excluded.takeoff_lon,
-    landing_lat = excluded.landing_lat,
-    landing_lon = excluded.landing_lon,
-    duration_s = excluded.duration_s,
-    max_altitude = excluded.max_altitude,
-    point_count = excluded.point_count,
-    glider_type = excluded.glider_type,
-    size_bytes = excluded.size_bytes,
-    uploaded_at = excluded.uploaded_at,
-    takeoff_hour = excluded.takeoff_hour,
-    takeoff_tz = excluded.takeoff_tz,
-    suspicious = excluded.suspicious`;
+     takeoff_hour, takeoff_tz)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO NOTHING`;
 
-const upsertParams = (f: Flight): unknown[] => [
+const insertParams = (f: Flight): unknown[] => [
   f.id,
   f.flight_date,
   f.pilot_name,
@@ -115,7 +103,6 @@ const upsertParams = (f: Flight): unknown[] => [
   f.uploaded_at,
   f.takeoff_hour,
   f.takeoff_tz,
-  f.suspicious,
 ];
 
 // --- Main ----------------------------------------------------------------------
@@ -195,12 +182,11 @@ async function main() {
         pilot_name: anonymous ? 'Anonymous' : parsed.meta.pilot_name,
         size_bytes,
         uploaded_at: uploadedAt,
-        suspicious: suspiciousFlags(parsed.meta),
       };
 
       if (!args.dryRun) {
         await r2PutGzip(creds, R2_BUCKET, `${id}.igc`, storeBuf);
-        await d1Query(creds, D1_DATABASE_ID, UPSERT_SQL, upsertParams(flight));
+        await d1Query(creds, D1_DATABASE_ID, INSERT_SQL, insertParams(flight));
       }
       tally.added++;
     } catch (e) {

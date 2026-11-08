@@ -12,6 +12,9 @@ npm run check                                         # svelte-check (typecheck)
 npm run format                                        # prettier --write
 npx wrangler d1 migrations apply open-igc-db --local  # create/refresh local D1
 npm run stats:local                                   # refresh the /stats snapshot (stats:remote for prod)
+npm run processor:dev                                 # queue consumer on :8788, same local state
+npm run check:processor                               # typecheck workers/processor — run before done
+npm run processor:deploy                              # deploy the consumer (the app deploys separately)
 ```
 
 There is no test suite and no lint step beyond `svelte-check` + prettier.
@@ -26,8 +29,13 @@ There is no test suite and no lint step beyond `svelte-check` + prettier.
 dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite +
   local R2 under `.wrangler/state`); no cloud calls, no keys.
 - **Bindings**: D1 is `env.DB` (binding `DB`, database_name `open-igc-db`), R2 is
-  `env.BUCKET` (bucket_name `open-igc`). The binding name is the code identifier, not
-  the resource name.
+  `env.BUCKET` (bucket_name `open-igc`), the queue producer is `env.FLIGHT_QUEUE`
+  (queue `flight-processing`). The binding name is the code identifier, not the
+  resource name.
+- **Two deployables**: the SvelteKit app (Pages, `wrangler.toml`) and the processor
+  Worker (`workers/processor/`, its own `wrangler.toml` and `tsconfig.json`, checked by
+  `npm run check:processor`, not by svelte-check). The account is on **Workers Paid**,
+  which the processor needs for its raised CPU limit.
 
 ## Data model / invariants (don't break these)
 
@@ -35,8 +43,31 @@ dev` the adapter's platformProxy supplies them from local Miniflare (real SQLite
   (The migration/README comments saying "hash of the file bytes" are imprecise.) This
   makes dedup name-independent: the same track uploaded named vs. anonymous → one id.
   `id` is also the R2 object key (`{id}.igc`) and the D1 primary key.
-- **Upsert is latest-upload-wins** (`upsertFlight`): re-uploading overwrites the row,
-  so an anonymous re-upload can relabel a named flight and vice versa.
+- **Re-uploads are refused** (`ingestIgc` returns `existingId`, the API answers 409).
+  Since the id ignores the pilot name, that includes an anonymous re-upload of a named
+  flight and vice versa: there is no way to relabel or anonymize a flight after the
+  fact. The duplicate check runs **before** the R2 put (the key is the id, so storing
+  first would let a named file overwrite an anonymous one), and `insertFlight` is
+  `ON CONFLICT DO NOTHING` so two racing uploads can't both win. Its success test is
+  `meta.changes > 0`, not `=== 1`: D1 also counts the row the 0004 counter trigger
+  writes, so a real insert reports 2.
+- **`processed_at` is NULL until workers/processor has handled the flight** (migration
+  0009). Uploads insert it NULL, with `suspicious` and the scores NULL too, and send
+  `{ id }` on the `flight-processing` queue. The processor reads the file from R2,
+  computes the whole `suspicious` mask and, for clean flights, the XC scores, then sets
+  `processed_at`. Until then the flight is hidden from `/browse`, left out of `/stats`
+  and its page shows a banner; the API lists it with `processed_at: null`.
+  - **The column is the source of truth, the queue only a trigger.** The send is best
+    effort (a failure is logged, the upload still succeeds), messages that exhaust
+    `max_retries` go to a dead-letter queue nothing reads, and bulk imports enqueue
+    nothing. A 30-minute cron in the processor re-enqueues rows still NULL after 10
+    minutes, off the `idx_flights_unprocessed` partial index.
+  - **Failures**: D1/R2 errors retry the message. A file that is missing or doesn't
+    parse, or a solver crash, is not retried: it gets the `UNPROCESSABLE` bit and a
+    `processed_at`, otherwise the cron would loop on it forever.
+  - **One flight per invocation** (`max_batch_size = 1`), processed synchronously: the
+    solver's module state (below) must not interleave, and a CPU-limit kill then only
+    retries that flight.
 - **Anonymity**: `stripIdentifyingHeaders` blanks the _values_ of H-records
   PLT/CM2/GID/CID (keeps them structurally valid); glider _type_ GTY is kept on purpose
   (searchable, not identifying). When `anonymous`, the stripped bytes are stored and
@@ -125,55 +156,64 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
 - **`/stats` reads a precomputed snapshot, never live aggregates.** The `stats` table
   (migration 0005) holds one row: flight count, the ids of the longest/highest flights,
   and per-year counts as JSON. It is refreshed **by hand** with `scripts/compute-stats.sql`
-  (`npm run stats:remote`) — the per-year `GROUP BY` is a full date-index scan (~187k
+  (`npm run stats:remote`), and counts processed, non-suspicious flights only — the
+  per-year `GROUP BY` is a full date-index scan (~187k
   reads), so it must not run per request. Record flights are stored as ids and joined at
   read time (`getStats`), so a relabel shows up without a recompute. `getStats` throws if
   the row is missing, same policy as `getFlightCount`. Values are raw maxima: no outlier
   filtering, so a GPS glitch would own "highest"/"longest" until fixed in the data.
 - **`suspicious` is a bitmask of glitch reasons, NULL for normal flights** (bits in
-  `src/lib/suspicious.ts`, never renumbered). `/stats` and `/browse` exclude flagged flights
-  (browse subtracts a count over the 0006 partial index from the cached total, so it
-  stays cheap), the flight page shows a banner, and the API still lists them. Two kinds
-  of bit, backfilled differently:
-  - **Threshold bits** (`ALT_TOO_HIGH`, `TOO_LONG`) are recomputed from metadata on the
-    Worker, so a client can't set them. Changing a threshold needs a new SQL migration
-    (0006 and 0007 hardcode the numbers); thresholds only went down so far, so the
-    migrations only OR bits in.
-  - **Track bits** (`ALT_SPIKE`, `BAD_TIMESTAMPS`, `TIME_GAP`,
-    `GROUND_TIME`, `POSITION_JUMP`) need the fixes, so they're
-    computed in `extractMetadata`, arrive from the upload page as trusted metadata, and
-    are backfilled by `scripts/backfill-suspicious.ts`. The backfill _replaces_ the track
-    bits (a rule change can clear a flag, not only add one) and writes only rows that
-    change, so re-run it after any change to `trackFlags`. Thresholds were picked from
-    full-corpus scans; see the comments in `suspicious.ts`.
+  `src/lib/suspicious.ts`, never renumbered). Only workers/processor writes it, never the
+  upload, so neither the browser nor a client can set a bit. `/stats` and `/browse`
+  exclude flagged flights (browse subtracts counts over the 0006 and 0009 partial
+  indexes from the cached total, so it stays cheap), the flight page shows a banner, and
+  the API still lists them. For existing rows, the two kinds of bit are backfilled
+  differently:
+  - **Threshold bits** (`ALT_TOO_HIGH`, `TOO_LONG`) only need metadata. Changing a
+    threshold needs a new SQL migration for existing rows (0006 and 0007 hardcode the
+    numbers); thresholds only went down so far, so the migrations only OR bits in.
+  - **Track bits** (`ALT_SPIKE`, `BAD_TIMESTAMPS`, `TIME_GAP`, `GROUND_TIME`,
+    `POSITION_JUMP`) need the fixes (`trackFlags(trackFixes(parsed))`), so existing rows
+    are backfilled from the local corpus by `scripts/backfill-suspicious.ts`. It
+    _replaces_ the track bits (a rule change can clear a flag, not only add one) and
+    writes only rows that change, so re-run it after any change to `trackFlags`.
+    Thresholds were picked from full-corpus scans; see the comments in `suspicious.ts`.
   - Fixed limits alone missed real glitches by a hair (8,915 m, 14 h 45 m), which is
     why the track rules exist. A new rule should be checked against the whole corpus
     before shipping, not just the examples that motivated it.
-- **XC scores (`score_xcontest`, `score_ffvl`) come only from the offline backfill**
-  (`scripts/backfill-xc-score.ts`, `npm run backfill:xcscore`), run by hand
-  periodically. `igc-xc-score` is a branch-and-bound solver: ~0.5 s per flight on
-  average over a corpus sample, several seconds for some, minutes in the worst case. That
-  rules out the Worker _and_ the upload page, so:
-  - NULL means "not scored yet", not "no score". New uploads stay NULL until the next run.
-  - `upsertFlight` takes a `NewFlight` and never names the score columns, so a re-upload
-    (same id = same track) keeps its scores. Don't add them to the upsert or to
-    `FlightMetadata`/`checkClaimedMetadata`: a client must not be able to claim a score.
-  - The dependency is a **devDependency** used only by `scripts/lib/xcscore.ts`. Nothing
-    under `src/` may import it (it's LGPL and heavy; check with `npm run build` and a
-    grep for `flatbush` in `.svelte-kit/`).
+- **XC scores (`score_xcontest`, `score_ffvl`) come from workers/processor** for new
+  uploads, and from the offline backfill (`scripts/backfill-xc-score.ts`,
+  `npm run backfill:xcscore`) for corpus-wide rescoring. `igc-xc-score` is a
+  branch-and-bound solver: ~0.6 s per flight on average over a corpus sample, 20 s for
+  some, minutes in the worst case. That rules out the app's Worker and the upload page:
+  - NULL means "not processed yet" (`processed_at IS NULL`) or "suspicious".
+  - `insertFlight` takes a `NewFlight`, which omits the processed columns. Don't add
+    them to it or to `FlightMetadata`/`checkClaimedMetadata`: a client must not be able
+    to claim a score or a flag.
+  - The dependency is a **devDependency** used only by `scripts/lib/xcscore.ts`, which
+    the processor and the backfill import. Nothing under `src/` may import it (it's LGPL
+    and heavy; check with `npm run build` and a grep for `flatbush` in `.svelte-kit/`).
   - The solver keeps module-level state (`geom.init`, a swapped `Point.prototype`
     distance), so scorings must not interleave in one thread; parallelism is
-    `worker_threads`.
-  - Options are `trim: true` (auto launch/landing, ignores ground time) and a per-rule
-    time budget; on timeout the best score found is stored, with no "optimal" flag. A
-    track with no detected flight stores 0, so it isn't retried on every run.
+    `worker_threads` in the backfill, separate invocations in the processor.
+  - **Budget in loops on the Worker, not milliseconds.** workerd's `Date.now()` doesn't
+    move during synchronous code, so a time budget (the backfill's `{ ms }`, igc-xc-score's
+    `maxcycle`) would never fire there and only the CPU limit would stop the solver. The
+    processor passes `{ loops }` (igc-xc-score's `maxloop`, a count of evaluated
+    solutions). Measured on 299 corpus files (2026-11-08): 18 solutions/ms on average
+    but 6.4/ms on the slowest tracks, so `LOOP_BUDGET` (150k per rule) is sized on the
+    slow rate against `cpu_ms`; 4 of the 299 needed more. Re-measure before raising it.
+  - Options are `trim: true` (auto launch/landing, ignores ground time); when the budget
+    runs out the best score found is stored, with no "optimal" flag. A track with no
+    detected flight stores 0.
   - The target set is `WHERE suspicious IS NULL AND score_xcontest IS NULL` with keyset
     paging on `id`: a range seek on `idx_flights_score_xcontest_id`, so a periodic run
     reads only unscored rows. **Suspicious flights are never scored** (a glitchy track
     gives a meaningless score): each run starts by NULLing the scores of flagged flights
     (via the 0006 partial index), because a flag can land after the score. So after a
     new track rule, run `backfill:suspicious`, then `backfill:xcscore`, then
-    `stats:remote`. Clearing a flag makes the flight a target again.
+    `stats:remote`. Clearing a flag makes the flight a target again. Neither backfill
+    touches `processed_at`.
     Without `<dir>` the script fetches targets from R2, which is the right mode once the
     corpus has had its first full pass. Results are written as they come (hours for a
     full pass), so resume is re-running.
@@ -189,8 +229,8 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   full read, versus 0 ms matched. Cost: same-date flights come back in a different order
   than before, including from the public API — still newest-first and still total/stable.
 
-- **Uploads are rejected** for: >5 MB, unparseable, <5 valid fixes, bad date, or
-  out-of-range coords. `ingestIgc`/`extractMetadata` never throw on bad input — they
+- **Uploads are rejected** for: >5 MB, unparseable, <5 valid fixes, bad date,
+  out-of-range coords, or an id already in D1. `ingestIgc`/`extractMetadata` never throw on bad input — they
   return `{ ok: false, error }`.
 - **R2 holds gzip only, never raw IGC bytes.** `ingestIgc` gzips (`CompressionStream`,
   native to `workerd`/Node, no dependency) after validation/hashing and sets
@@ -218,7 +258,8 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
     re-strips as the check. If that changes nothing, the client gzip is kept; otherwise
     (curl, a stale page) the Worker stores its own stripped bytes and gzips them itself.
     Never skip the re-strip on the strength of the page having done it.
-- **The upload page's metadata is trusted, not verified.** Browser gzip alone changed
+- **The upload page's metadata is trusted, not verified** (glitch checks are no longer
+  part of it: they run in the processor). Browser gzip alone changed
   nothing measurable in prod: Cloudflare analytics showed successful uploads at a
   median 20–27 ms CPU both before and after (prod is ~4× slower than local Node, so the
   local numbers above get proportions right, not absolutes), and once the free plan's
@@ -228,20 +269,24 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
   values must be Latin-1); with it, `ingestIgc` skips parsing and only runs
   `checkClaimedMetadata` (types, ranges, real date, bounded strings, rebuilt field by
   field so extra keys never reach the INSERT) plus a sniff that the text starts with
-  an A record and has a B record. This was a deliberate trade, chosen over Workers
-  Paid ($5/month). What it does and doesn't allow:
+  an A record and has a B record. This was a deliberate trade made on the free plan;
+  the account is on Workers Paid now, so the app's CPU limit no longer forces it, but it
+  was kept. What it does and doesn't allow:
   - A hand-crafted `POST` can store **wrong metadata or a non-flight file** shaped like
     IGC. It **cannot overwrite another flight**: the id is still hashed on the Worker
     from the bytes it stores. Don't ever accept a client-supplied id.
-  - Requests without the header (curl, the no-JS form) still parse on the Worker and
-    still risk 1102 on long tracks.
   - R2 holds the real files, so bad rows are recoverable: re-run `extractMetadata`
     over the corpus offline, `backfill-takeoff-time.ts`-style, and diff against D1.
 
 ## Where things are
 
-- `src/lib/upload.ts` — `ingestIgc`, the single ingest pipeline (validate → R2 → D1),
-  shared by the form action and the JSON API so both behave identically.
+- `src/lib/upload.ts` — `ingestIgc`, the single ingest pipeline (validate → duplicate
+  check → D1 → R2 → queue), shared by the form action and the JSON API so both behave
+  identically.
+- `workers/processor/src/index.ts` — the queue consumer (glitch checks, XC scores,
+  `processed_at`) and the cron sweep. `npm run processor:dev` runs it locally against
+  the same `.wrangler/state` as `vite dev`; the local queue does reach it across the two
+  processes, and `/__scheduled` on port 8788 fires the cron.
 - **Browser upload fans out per-file**: with JS on, `upload/+page.svelte` POSTs each
   file separately to `/flights` (one file = one worker invocation = its own CPU budget),
   streaming results in. The multi-file server action in `upload/+page.server.ts` is the

@@ -1,3 +1,5 @@
+import type IGCParser from 'igc-parser';
+
 /**
  * Reasons a flight's data looks glitchy, as bit flags. `flights.suspicious` is NULL for a
  * normal flight and the OR of these bits otherwise. Append new reasons with the next
@@ -11,14 +13,16 @@ export const SUSPICIOUS = {
   TIME_GAP: 16,
   GROUND_TIME: 32,
   POSITION_JUMP: 64,
+  /** The processor could not read or parse the stored file, so nothing could be checked. */
+  UNPROCESSABLE: 128,
 } as const;
 
 export type SuspiciousReason = keyof typeof SUSPICIOUS;
 
 /**
- * Bits that need the track points. The others are recomputed from stored metadata
- * anywhere, but these exist only where the file was parsed, so they travel inside
- * `FlightMetadata.suspicious` and get backfilled from the corpus, not by SQL.
+ * Bits that need the track points, as opposed to the threshold bits, which only need
+ * the stored metadata. All of them are computed by workers/processor; the offline
+ * backfill rewrites only these, since a rule change can clear one.
  */
 export const TRACK_BITS =
   SUSPICIOUS.ALT_SPIKE |
@@ -111,6 +115,7 @@ export const SUSPICIOUS_LABELS: Record<SuspiciousReason, string> = {
   TIME_GAP: `The track has a gap of more than ${MAX_GAP_S / 60} minutes without fixes, so the duration is unreliable`,
   GROUND_TIME: 'The logger kept recording on the ground (parked or in a car), so the duration is unreliable',
   POSITION_JUMP: `The track jumps more than ${JUMP_M / 1000} km faster than any glider can fly (a GPS glitch), so positions and the XC score are unreliable`,
+  UNPROCESSABLE: 'The stored file could not be read or parsed, so it could not be checked or scored',
 };
 
 /** One fix, as `trackFlags` needs it. `timestamp` is in ms. */
@@ -119,6 +124,18 @@ export interface TrackFix {
   altitude: number | null;
   latitude: number;
   longitude: number;
+}
+
+/** The valid fixes of a parsed file, in the shape `trackFlags` reads. */
+export function trackFixes(parsed: IGCParser.IGCFile): TrackFix[] {
+  return parsed.fixes
+    .filter((f) => f.valid)
+    .map((f) => ({
+      timestamp: f.timestamp,
+      altitude: f.gpsAltitude ?? f.pressureAltitude,
+      latitude: f.latitude,
+      longitude: f.longitude,
+    }));
 }
 
 /**
@@ -235,9 +252,8 @@ function altitudeSpike(fixes: readonly TrackFix[]): boolean {
 }
 
 /**
- * The full bitmask, or null when nothing applies. The threshold bits are always
- * recomputed from the metadata; only TRACK_BITS are taken from `m.suspicious`, which
- * is how a value claimed by the upload page can't set the other bits by itself.
+ * The full bitmask, or null when nothing applies: the threshold bits from the metadata,
+ * plus the TRACK_BITS of `m.suspicious` (what `trackFlags` returned).
  */
 export function suspiciousFlags(m: {
   duration_s: number;

@@ -1,0 +1,44 @@
+# Consumer of the flight-processing queue: glitch checks and XC scores for every new
+# upload. A separate Worker because scoring takes ~0.5 s of CPU per flight on average
+# and minutes in the worst case, which needs Workers Paid's raised CPU limit; the app
+# itself never runs it. Deploy: npm run processor:deploy
+name = "open-igc-processor"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Same resources as the app (../../wrangler.toml).
+[[d1_databases]]
+binding = "DB"
+database_name = "open-igc-db"
+database_id = "0b6f991e-6fb8-4fbc-90fb-600aa020f175"
+migrations_dir = "../../migrations"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "open-igc"
+
+[limits]
+# Per invocation, so per batch: max_batch_size × the worst case of one flight (two
+# rules, each capped by LOOP_BUDGET in src/index.ts) must stay below this.
+cpu_ms = 300000
+
+[[queues.consumers]]
+queue = "flight-processing"
+# One flight per invocation: a slow track then can't push its neighbours past cpu_ms,
+# and a CPU-limit kill retries only that flight. Throughput comes from the queue running
+# several consumer invocations in parallel.
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 3
+# Messages land here after max_retries failures (D1/R2 errors). Nothing consumes it:
+# the cron below re-enqueues every row still unprocessed, which covers them.
+dead_letter_queue = "flight-processing-dlq"
+
+# The cron sweep sends on the same queue.
+[[queues.producers]]
+binding = "FLIGHT_QUEUE"
+queue = "flight-processing"
+
+[triggers]
+crons = ["*/30 * * * *"]

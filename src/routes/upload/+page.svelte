@@ -82,21 +82,26 @@
     }
 
     const text = await res.text().catch(() => '');
+    if (res.status === 409) {
+      const data = parseJson(text) as { error?: string; id?: string };
+      return { name: file.name, status: 'duplicate', id: data.id, error: data.error };
+    }
     if (!res.ok) {
       const cause = describeHttpError(res.status, text);
       if (cause.overloaded) onOverload();
       console.error(`Upload of ${file.name} failed with ${res.status}`, text.slice(0, 500));
       return { name: file.name, status: 'error', error: cause.message };
     }
-    const data = parseJson(text) as { status?: string; id?: string };
-    return { name: file.name, status: data.status === 'duplicate' ? 'duplicate' : 'added', id: data.id };
+    const data = parseJson(text) as { id?: string };
+    return { name: file.name, status: 'added', id: data.id };
   }
 
   /**
-   * Do the Worker's CPU-heavy work here. On the free plan it gets ~10 ms of CPU per
+   * Do the Worker's CPU-heavy work here. On the free plan it got ~10 ms of CPU per
    * request, and in prod a median upload took 20+ ms: parsing and gzip were both too
    * much. So the page parses (same `extractMetadata` as the server) and sends the result
    * in a header, and gzips the body; the Worker only inflates, hashes and shape-checks.
+   * Glitch checks are not part of this: they run later, in workers/processor.
    * Anonymous files are stripped first so the stored gzip can be ours; the Worker
    * re-strips to check. A file that fails to parse is reported without a request.
    */
@@ -313,22 +318,23 @@
 
 {#if displayResults}
   <div class="mt-6 mb-3">
-    <strong>{added} added</strong>, {dup} already in database, {errs} failed.
+    <strong>{added} added</strong>, {dup} refused (already in the database), {errs} failed.
   </div>
   <ul class="w-max list-none p-0">
     {#each displayResults as r (r.name)}
       <li
         class="mb-1.5 flex justify-between gap-4 rounded-md px-3 py-2 {r.status === 'added'
           ? 'bg-green-50'
-          : r.status === 'duplicate'
-            ? 'bg-gray-100'
-            : 'bg-red-50'}"
+          : 'bg-red-50'}"
       >
         <span class="font-mono text-sm">{r.name}</span>
         {#if r.status === 'added'}
           <a href={`/flight/${r.id}`}>added — view flight</a>
         {:else if r.status === 'duplicate'}
-          <a href={`/flight/${r.id}`}>already in database — view</a>
+          <span class="text-sm text-red-700">
+            {r.error ?? 'This flight is already in the database.'}
+            {#if r.id}<a href={`/flight/${r.id}`}>View it</a>{/if}
+          </span>
         {:else}
           <span class="text-sm text-red-700">{r.error}</span>
         {/if}

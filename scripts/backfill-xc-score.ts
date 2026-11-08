@@ -89,7 +89,7 @@ function runWorker(): void {
       // A duplicate file of the same track would be solved twice; dropping the id here
       // keeps that to one per worker.
       if (want.delete(id)) {
-        const res = scoreIgc(text, budgetMs);
+        const res = scoreIgc(text, { ms: budgetMs });
         if (res) {
           const { score_xcontest: x, score_ffvl: f } = res.scores;
           report.rows.push({ id, x, f, ms: res.elapsedMs, truncated: res.truncated, source: path });
@@ -361,7 +361,7 @@ async function main() {
       if (writer.aborted) return;
       try {
         const obj = await r2Get(creds, R2_BUCKET, `${id}.igc`);
-        const res = obj && scoreIgc(new TextDecoder().decode(obj.body), args.budgetMs);
+        const res = obj && scoreIgc(new TextDecoder().decode(obj.body), { ms: args.budgetMs });
         if (res) {
           const { score_xcontest: x, score_ffvl: f } = res.scores;
           onRow({ id, x, f, ms: res.elapsedMs, truncated: res.truncated, source: `r2:${id}` });

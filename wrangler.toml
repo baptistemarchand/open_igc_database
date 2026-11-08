@@ -17,6 +17,12 @@ migrations_dir = "migrations"
 binding = "BUCKET"
 bucket_name = "open-igc"
 
+# Every upload pushes its flight id here; workers/processor consumes it (glitch checks
+# and XC scores, too heavy for this app). Create once: npx wrangler queues create flight-processing
+[[queues.producers]]
+binding = "FLIGHT_QUEUE"
+queue = "flight-processing"
+
 # Non-secret vars. Leave R2_PUBLIC_URL empty in dev (download falls back to the /f/[id]
 # route which streams from the bucket binding). In production set it to the bucket's
 # public custom domain, e.g. "https://files.example.org", so downloads link straight to R2.

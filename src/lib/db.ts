@@ -6,48 +6,39 @@ export interface Flight extends FlightMetadata {
   id: string;
   size_bytes: number;
   uploaded_at: number;
-  /** XC scores in points, NULL until scripts/backfill-xc-score.ts has run on the flight. */
+  /** Bitmask from src/lib/suspicious.ts, NULL when nothing is suspicious or not processed yet. */
+  suspicious: number | null;
+  /** XC scores in points, NULL until the flight is processed (or when it is suspicious). */
   score_xcontest: number | null;
   score_ffvl: number | null;
+  /** Epoch seconds when workers/processor handled the flight, NULL until then. */
+  processed_at: number | null;
 }
 
-/** A flight as an upload produces it: everything but the columns only the offline backfill writes. */
-export type NewFlight = Omit<Flight, 'score_xcontest' | 'score_ffvl'>;
+/** Columns only the processor writes. An upload never sets them. */
+type ProcessedColumns = 'suspicious' | 'score_xcontest' | 'score_ffvl' | 'processed_at';
+
+/** A flight as an upload produces it. */
+export type NewFlight = Omit<Flight, ProcessedColumns>;
 
 /**
- * Insert or refresh a flight. The id is a name-independent content hash, so a
- * conflicting id means "same flight, newer upload" — the row is overwritten
- * (latest-upload-wins), which lets an anonymous re-upload relabel a named flight
- * and vice versa. Whether the row is new is determined by the caller.
+ * Insert a new flight, unprocessed. Returns false when the id already exists: the id is
+ * a name-independent content hash, so that means the same track is already stored, and
+ * re-uploads are refused rather than overwriting it. `ON CONFLICT DO NOTHING` makes
+ * that hold even when two uploads of the same file race past the caller's own check.
  *
- * The XC score columns are deliberately absent: a new row gets NULL ("not scored
- * yet"), and a re-upload keeps the backfilled scores, which is right because the same
- * id means the same track.
+ * The processed columns are left to their NULL defaults: `processed_at IS NULL` is what
+ * makes workers/processor pick the flight up.
  */
-export async function upsertFlight(db: D1Database, f: NewFlight): Promise<void> {
-  await db
+export async function insertFlight(db: D1Database, f: NewFlight): Promise<boolean> {
+  const res = await db
     .prepare(
       `INSERT INTO flights
          (id, flight_date, pilot_name, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
           duration_s, max_altitude, point_count, glider_type, size_bytes, uploaded_at,
-          takeoff_hour, takeoff_tz, suspicious)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         flight_date = excluded.flight_date,
-         pilot_name = excluded.pilot_name,
-         takeoff_lat = excluded.takeoff_lat,
-         takeoff_lon = excluded.takeoff_lon,
-         landing_lat = excluded.landing_lat,
-         landing_lon = excluded.landing_lon,
-         duration_s = excluded.duration_s,
-         max_altitude = excluded.max_altitude,
-         point_count = excluded.point_count,
-         glider_type = excluded.glider_type,
-         size_bytes = excluded.size_bytes,
-         uploaded_at = excluded.uploaded_at,
-         takeoff_hour = excluded.takeoff_hour,
-         takeoff_tz = excluded.takeoff_tz,
-         suspicious = excluded.suspicious`,
+          takeoff_hour, takeoff_tz)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO NOTHING`,
     )
     .bind(
       f.id,
@@ -65,9 +56,16 @@ export async function upsertFlight(db: D1Database, f: NewFlight): Promise<void> 
       f.uploaded_at,
       f.takeoff_hour,
       f.takeoff_tz,
-      f.suspicious,
     )
     .run();
+  // `> 0`, not `=== 1`: D1 counts the row the flight_count trigger (migration 0004)
+  // writes too, so a successful insert reports 2. A conflict fires no trigger: 0.
+  return res.meta.changes > 0;
+}
+
+/** Undo `insertFlight` when the file could not be stored, so no row points at nothing. */
+export async function deleteFlight(db: D1Database, id: string): Promise<void> {
+  await db.prepare('DELETE FROM flights WHERE id = ?').bind(id).run();
 }
 
 export async function getFlight(db: D1Database, id: string): Promise<Flight | null> {
@@ -187,6 +185,8 @@ export const FLIGHT_COLUMNS = [
   // Added by migration 0008.
   'score_xcontest',
   'score_ffvl',
+  // Added by migration 0009.
+  'processed_at',
 ] as const satisfies readonly (keyof Flight)[];
 
 export type FlightColumn = (typeof FLIGHT_COLUMNS)[number];
@@ -278,9 +278,10 @@ export interface SearchResult {
 
 /**
  * Search + sort + paginate flights for /browse. All filters optional and combinable.
- * Suspicious flights (glitchy tracks, see src/lib/suspicious.ts) are always left out:
- * they would top the duration, altitude and score sorts. They stay reachable by URL,
- * and the public API still lists them.
+ * Only processed, non-suspicious flights are listed. Suspicious ones (glitchy tracks,
+ * see src/lib/suspicious.ts) would top the duration, altitude and score sorts, and
+ * unprocessed ones haven't been checked for that yet. Both stay reachable by URL, and
+ * the public API still lists them.
  */
 export async function searchFlights(db: D1Database, p: SearchParams): Promise<SearchResult> {
   const where: string[] = [];
@@ -304,7 +305,7 @@ export async function searchFlights(db: D1Database, p: SearchParams): Promise<Se
   }
 
   const filtered = where.length > 0;
-  const whereSql = `WHERE ${['suspicious IS NULL', ...where].join(' AND ')}`;
+  const whereSql = `WHERE ${['processed_at IS NOT NULL', 'suspicious IS NULL', ...where].join(' AND ')}`;
   const sortCol = SORT_COLUMNS[p.sort ?? 'date'];
   const dir = p.dir === 'asc' ? 'ASC' : 'DESC';
   const limit = Math.min(Math.max(p.limit ?? 50, 1), 100);
@@ -312,15 +313,17 @@ export async function searchFlights(db: D1Database, p: SearchParams): Promise<Se
 
   // Only pay for a full COUNT when a filter narrows the set. Unfiltered, the answer is
   // the cached counter (see getFlightCount for why the bare COUNT(*) had to go) minus
-  // the flagged flights, counted off the partial index from migration 0006, which holds
-  // only those few hundred rows.
+  // the flagged and the unprocessed flights, each counted off its own small partial
+  // index (migrations 0006 and 0009). The two sets don't overlap: an unprocessed flight
+  // has no flags yet.
   let total: number;
   if (!filtered) {
-    const [all, flagged] = await Promise.all([
+    const [all, flagged, pending] = await Promise.all([
       getFlightCount(db),
       db.prepare('SELECT COUNT(*) AS n FROM flights WHERE suspicious IS NOT NULL').first<{ n: number }>(),
+      db.prepare('SELECT COUNT(*) AS n FROM flights WHERE processed_at IS NULL').first<{ n: number }>(),
     ]);
-    total = all - (flagged?.n ?? 0);
+    total = all - (flagged?.n ?? 0) - (pending?.n ?? 0);
   } else {
     const totalRow = await db
       .prepare(`SELECT COUNT(*) AS n FROM flights ${whereSql}`)

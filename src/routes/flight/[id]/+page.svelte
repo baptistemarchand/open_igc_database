@@ -7,6 +7,8 @@
   let { data }: PageProps = $props();
   const f = $derived(data.flight);
   const reasons = $derived(suspiciousReasons(f.suspicious));
+  // Processed flights only lack a score when they are suspicious, which the banner explains.
+  const noScore = $derived(f.processed_at == null ? 'Pending' : '—');
 
   let mapEl: HTMLDivElement | undefined = $state();
   // Optimistically show the map box; hidden if the track can't be fetched/parsed.
@@ -154,6 +156,15 @@
   <title>Flight {f.flight_date}{f.pilot_name ? ` — ${f.pilot_name}` : ''} — Open IGC Database</title>
 </svelte:head>
 
+{#if f.processed_at == null}
+  <div class="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900" role="status">
+    <p class="font-medium">This flight is still being processed.</p>
+    <p class="mt-1">
+      Glitch checks and XC scores are pending. Until then it is hidden from Browse and not counted in the stats.
+    </p>
+  </div>
+{/if}
+
 {#if reasons.length}
   <div class="mb-4 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900" role="alert">
     <p class="font-medium">This flight's data looks suspicious and is excluded from the stats.</p>
@@ -184,8 +195,8 @@
       <tr><th>Glider</th><td>{f.glider_type ?? '—'}</td></tr>
       <tr><th>Duration</th><td>{formatDuration(f.duration_s)}</td></tr>
       <tr><th>Max altitude</th><td>{f.max_altitude != null ? `${f.max_altitude} m` : '—'}</td></tr>
-      <tr><th>XContest score</th><td>{formatScore(f.score_xcontest, 'Not scored yet')}</td></tr>
-      <tr><th>FFVL score</th><td>{formatScore(f.score_ffvl, 'Not scored yet')}</td></tr>
+      <tr><th>XContest score</th><td>{formatScore(f.score_xcontest, noScore)}</td></tr>
+      <tr><th>FFVL score</th><td>{formatScore(f.score_ffvl, noScore)}</td></tr>
       <tr><th>Takeoff</th><td>{formatCoord(f.takeoff_lat, f.takeoff_lon)}</td></tr>
       <tr><th>Landing</th><td>{formatCoord(f.landing_lat, f.landing_lon)}</td></tr>
       <tr><th>GPS fixes</th><td>{f.point_count.toLocaleString()}</td></tr>

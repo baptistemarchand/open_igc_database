@@ -1,7 +1,6 @@
-import type { D1Database, R2Bucket } from '@cloudflare/workers-types';
-import { getFlight, upsertFlight, type NewFlight } from '$lib/db';
+import type { D1Database, Queue, R2Bucket } from '@cloudflare/workers-types';
+import { deleteFlight, getFlight, insertFlight, type NewFlight } from '$lib/db';
 import { checkClaimedMetadata, extractMetadata, stripIdentifyingHeaders, type ExtractResult } from '$lib/igc';
-import { suspiciousFlags } from '$lib/suspicious';
 import { gunzipCapped, gzip, isGzip } from '$lib/gzip';
 
 export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — IGC files are small
@@ -12,10 +11,16 @@ export async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** The storage bindings a single ingest needs. */
+/** Message body on the flight-processing queue, consumed by workers/processor. */
+export interface ProcessMessage {
+  id: string;
+}
+
+/** The bindings a single ingest needs. */
 export interface IngestEnv {
   DB: D1Database;
   BUCKET: R2Bucket;
+  FLIGHT_QUEUE: Queue<ProcessMessage>;
 }
 
 export interface IngestOptions {
@@ -25,24 +30,30 @@ export interface IngestOptions {
   uploadedAt: number;
   /**
    * Metadata the client already extracted (the upload page does). When present the
-   * Worker skips parsing — the one step that still overran the free plan's CPU limit —
-   * and only shape-checks it. Absent for API and no-JS uploads, which are parsed here.
+   * Worker skips parsing and only shape-checks it. Absent for API and no-JS uploads,
+   * which are parsed here.
    */
   claimedMetadata?: unknown;
 }
 
+export const DUPLICATE_ERROR = 'This flight is already in the database.';
+
 export type IngestResult =
-  { ok: true; status: 'added' | 'duplicate'; flight: NewFlight } | { ok: false; error: string };
+  | { ok: true; flight: NewFlight }
+  /** `existingId` is set only when the file was refused as a duplicate. */
+  | { ok: false; error: string; existingId?: string };
 
 /**
- * Ingest a single raw IGC file: validate it, store the bytes in R2 and upsert the
- * metadata row in D1. Shared by the browser upload form action and the POST /flights
- * API route so both behave identically.
+ * Ingest a single raw IGC file: validate it, insert the metadata row in D1, store the
+ * bytes in R2 and queue the flight for processing (glitch checks and XC scores, in
+ * workers/processor). Shared by the browser upload form action and the POST /flights
+ * API route so both behave identically. No glitch check runs here: the row starts with
+ * `processed_at` and `suspicious` NULL, which keeps it out of /browse and /stats.
  *
  * The id is the SHA-256 of the identifier-stripped bytes, so the same track dedups to
- * one flight whether or not it was uploaded anonymously. On an id conflict the row is
- * overwritten (latest-upload-wins, via upsertFlight); `status` reports whether the row
- * already existed. Never throws for bad input — junk is returned as { ok: false }.
+ * one flight whether or not it was uploaded anonymously. A file whose id already exists
+ * is refused with `existingId`. Never throws for bad input — junk is returned as
+ * { ok: false }.
  *
  * `body` may be the IGC bytes or a gzip of them (detected by magic bytes, so any client
  * can send either). Gzip is the single most expensive step of an ingest, so the upload
@@ -83,24 +94,41 @@ export async function ingestIgc(env: IngestEnv, body: ArrayBuffer, opts: IngestO
   const storeBuf = opts.anonymous && scrubbedText !== text ? scrubbed : buf;
   const gz = clientGzip && storeBuf === buf ? clientGzip : await gzip(storeBuf);
 
+  // Checked before the R2 put: the object key is the id, so storing first would let a
+  // named upload overwrite the stripped file of a flight uploaded anonymously.
+  const duplicate = { ok: false, error: DUPLICATE_ERROR, existingId: id } as const;
+  if ((await getFlight(env.DB, id)) != null) return duplicate;
+
   // size_bytes reflects the logical (uncompressed) IGC file, so it's captured from
   // storeBuf before gzip — R2 itself holds only the compressed bytes.
-  await env.BUCKET.put(`${id}.igc`, gz, {
-    httpMetadata: { contentType: 'text/plain; charset=utf-8', contentEncoding: 'gzip' },
-  });
-
-  const existed = (await getFlight(env.DB, id)) != null;
   const flight: NewFlight = {
     id,
     ...parsed.meta,
     pilot_name: opts.anonymous ? 'Anonymous' : parsed.meta.pilot_name,
     size_bytes: storeBuf.byteLength,
     uploaded_at: opts.uploadedAt,
-    suspicious: suspiciousFlags(parsed.meta),
   };
-  await upsertFlight(env.DB, flight);
+  // Row first, so a concurrent upload of the same file loses here, before it can touch R2.
+  if (!(await insertFlight(env.DB, flight))) return duplicate;
 
-  return { ok: true, status: existed ? 'duplicate' : 'added', flight };
+  try {
+    await env.BUCKET.put(`${id}.igc`, gz, {
+      httpMetadata: { contentType: 'text/plain; charset=utf-8', contentEncoding: 'gzip' },
+    });
+  } catch (e) {
+    await deleteFlight(env.DB, id);
+    throw e;
+  }
+
+  // Best effort: the processor's cron re-enqueues every row still unprocessed, so a
+  // failed send only delays the flight instead of failing an upload that did succeed.
+  try {
+    await env.FLIGHT_QUEUE.send({ id });
+  } catch (e) {
+    console.error(`Could not queue ${id} for processing`, e);
+  }
+
+  return { ok: true, flight };
 }
 
 /**

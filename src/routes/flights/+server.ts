@@ -102,8 +102,10 @@ export const GET: RequestHandler = async ({ platform, url }) => {
  * trips SvelteKit's CSRF form-submission guard. Pass `?anonymous=1` to strip identifying
  * headers and list the pilot as "Anonymous". No auth — this endpoint is for scripts.
  *
- * Responds with the flight row plus `url` and `status`: HTTP 201 when the flight is new,
- * 200 when the same track was already stored (dedup by content hash), 400 for junk.
+ * Responds 201 with the flight row plus `url`. Re-uploads are refused: 409 with `error`
+ * and the existing flight's `id` and `url` when the same track is already stored (dedup
+ * by content hash, ignoring the pilot name), 400 for junk. A new flight starts
+ * unprocessed (`processed_at: null`); glitch checks and XC scores follow asynchronously.
  */
 export const POST: RequestHandler = async ({ request, platform, url }) => {
   if (!platform?.env) throw error(503, 'Storage unavailable');
@@ -127,10 +129,16 @@ export const POST: RequestHandler = async ({ request, platform, url }) => {
     claimedMetadata,
   });
 
-  if (!result.ok) return json({ error: result.error }, { status: 400 });
+  if (!result.ok) {
+    if (result.existingId) {
+      const id = result.existingId;
+      return json({ error: result.error, id, url: fileUrl({ id }, platform.env, url.origin) }, { status: 409 });
+    }
+    return json({ error: result.error }, { status: 400 });
+  }
 
   return json(
-    { status: result.status, ...result.flight, url: fileUrl(result.flight, platform.env, url.origin) },
-    { status: result.status === 'added' ? 201 : 200 },
+    { ...result.flight, processed_at: null, url: fileUrl(result.flight, platform.env, url.origin) },
+    { status: 201 },
   );
 };

@@ -31,8 +31,9 @@ import { readFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { gunzipSync } from 'node:zlib';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
+import IGCParser from 'igc-parser';
 import { extractMetadata, stripIdentifyingHeaders } from '../src/lib/igc.ts';
-import { SUSPICIOUS, TRACK_BITS } from '../src/lib/suspicious.ts';
+import { SUSPICIOUS, TRACK_BITS, trackFixes, trackFlags } from '../src/lib/suspicious.ts';
 import { D1_DATABASE_ID, R2_BUCKET, loadEnvFile, d1Query, d1Exec, r2Get, runPool, type Creds } from './lib/cf-api.ts';
 import { findIgcFiles, sha256Hex } from './lib/local-igc.ts';
 
@@ -55,6 +56,15 @@ interface WorkerReport {
   unusable: number;
 }
 
+/**
+ * The track bits workers/processor would compute, or null for a file the app would have
+ * rejected at upload (`extractMetadata` is that gate, so it stays the filter here).
+ */
+function trackBits(text: string): number | null {
+  if (!extractMetadata(text).ok) return null;
+  return trackFlags(trackFixes(IGCParser.parse(text, { lenient: true }))) & TRACK_BITS;
+}
+
 function runWorker(): void {
   const { paths } = workerData as { paths: string[] };
   const port = parentPort!;
@@ -67,13 +77,9 @@ function runWorker(): void {
   for (const path of paths) {
     try {
       const text = new TextDecoder().decode(gunzipSync(readFileSync(path)));
-      const res = extractMetadata(text);
-      if (!res.ok) report.unusable++;
-      else
-        report.rows.push({
-          id: sha256Hex(stripIdentifyingHeaders(text)),
-          bits: (res.meta.suspicious ?? 0) & TRACK_BITS,
-        });
+      const bits = trackBits(text);
+      if (bits == null) report.unusable++;
+      else report.rows.push({ id: sha256Hex(stripIdentifyingHeaders(text)), bits });
     } catch {
       report.unusable++;
     }
@@ -219,9 +225,9 @@ async function main() {
     await runPool(misses, args.concurrency, async (id) => {
       try {
         const obj = await r2Get(creds, R2_BUCKET, `${id}.igc`);
-        const res = obj && extractMetadata(new TextDecoder().decode(obj.body));
-        if (res && res.ok) {
-          resolved.set(id, (res.meta.suspicious ?? 0) & TRACK_BITS);
+        const bits = obj && trackBits(new TextDecoder().decode(obj.body));
+        if (bits != null) {
+          resolved.set(id, bits);
           return;
         }
       } catch (e) {
