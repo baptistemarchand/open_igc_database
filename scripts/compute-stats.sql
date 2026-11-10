@@ -15,7 +15,8 @@
 -- small partial indexes), which keeps the big scan covering instead of a table lookup
 -- per row.
 INSERT OR REPLACE INTO stats
-  (id, computed_at, flight_count, longest_id, highest_id, best_xcontest_id, best_ffvl_id, per_year, per_glider)
+  (id, computed_at, flight_count, longest_id, highest_id, best_xcontest_id, best_ffvl_id, per_year, per_glider,
+   best_per_year)
 SELECT
   1,
   CAST(strftime('%s', 'now') AS INTEGER),
@@ -58,4 +59,13 @@ SELECT
             GROUP BY gid, n
             ORDER BY median DESC, gid
             LIMIT 15) m
-     JOIN gliders g ON g.id = m.gid);
+     JOIN gliders g ON g.id = m.gid),
+  -- Best XContest score of each year, with its flight so the bar can link to it: SQLite
+  -- takes a bare column (id) from the row that holds the MAX. Score and flags aren't in
+  -- the date index, so this reads every scored row once.
+  (SELECT COALESCE(json_group_array(json_object('year', y, 'score', ROUND(s, 1), 'id', id)), '[]')
+     FROM (SELECT substr(flight_date, 1, 4) AS y, MAX(score_xcontest) AS s, id
+             FROM flights
+            WHERE suspicious IS NULL AND processed_at IS NOT NULL AND score_xcontest IS NOT NULL
+            GROUP BY y
+            ORDER BY y));

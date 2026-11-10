@@ -13,6 +13,8 @@
     return `${k < 10 ? k.toFixed(1).replace(/\.0$/, '') : Math.round(k)}k`;
   }
 
+  const maxBest = $derived(Math.max(1, ...stats.bestPerYear.map((y) => y.score)));
+
   // JSON from the snapshot carries no order: rank by what the chart shows.
   const gliders = $derived([...stats.perGlider].sort((a, b) => b.median - a.median || b.flights - a.flights));
   const maxMedian = $derived(Math.max(1, ...gliders.map((g) => g.median)));
@@ -78,6 +80,27 @@
   </div>
   <figcaption class="muted">The lighter bar is the year of the snapshot, which may be incomplete.</figcaption>
 </figure>
+
+{#if stats.bestPerYear.length > 0}
+  <h2>Best score per year</h2>
+  <figure>
+    <div class="chart">
+      {#each stats.bestPerYear as y (y.year)}
+        <a
+          class="col"
+          href="/flight/{y.id}"
+          title="{y.year}: best score {y.score} pts"
+          aria-label="{y.year}: best score {y.score} points, open the flight"
+        >
+          <span class="count">{Math.round(y.score)}</span>
+          <div class="bar" class:partial={y.year === partialYear} style:height="{(y.score / maxBest) * 100}%"></div>
+          <span class="year">{y.year.slice(2)}</span>
+        </a>
+      {/each}
+    </div>
+    <figcaption class="muted">Best XContest score of each year, in points. Each bar links to its flight.</figcaption>
+  </figure>
+{/if}
 
 {#if gliders.length > 0}
   <h2>Median score by glider</h2>
@@ -167,6 +190,13 @@
     background: #0064c8;
     border-radius: 3px 3px 0 0;
     min-height: 1px;
+  }
+  a.col {
+    color: inherit;
+    text-decoration: none;
+  }
+  a.col:hover .bar {
+    background: #004a94;
   }
   .bar.partial {
     opacity: 0.45;

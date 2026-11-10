@@ -127,6 +127,8 @@ export interface Stats {
   /** The 15 gliders with the best median score among those with ≥ 50 scored flights,
    *  in no particular order. */
   perGlider: GliderScore[];
+  /** Ascending by year: each year's best XContest score and the flight holding it. */
+  bestPerYear: { year: string; score: number; id: string }[];
 }
 
 export interface GliderScore {
@@ -150,7 +152,7 @@ export async function getStats(db: D1Database): Promise<Stats> {
   const row = await db
     .prepare(
       `SELECT computed_at, flight_count, longest_id, highest_id, best_xcontest_id, best_ffvl_id, per_year,
-         per_glider
+         per_glider, best_per_year
        FROM stats WHERE id = 1`,
     )
     .first<{
@@ -162,6 +164,7 @@ export async function getStats(db: D1Database): Promise<Stats> {
       best_ffvl_id: string | null;
       per_year: string;
       per_glider: string;
+      best_per_year: string;
     }>();
   if (!row)
     throw new Error('stats row missing — apply migration 0005, then run scripts/compute-stats.sql (see CLAUDE.md)');
@@ -187,6 +190,7 @@ export async function getStats(db: D1Database): Promise<Stats> {
     bestFfvl,
     perYear,
     perGlider: JSON.parse(row.per_glider) as GliderScore[],
+    bestPerYear: (JSON.parse(row.best_per_year) as Stats['bestPerYear']).sort((a, b) => a.year.localeCompare(b.year)),
   };
 }
 
