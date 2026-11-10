@@ -192,7 +192,20 @@
       <tr><th>Date</th><td>{f.flight_date}</td></tr>
       <tr><th>Takeoff time</th><td>{formatHour(f.takeoff_hour)}{f.takeoff_tz ? ` (${f.takeoff_tz})` : ''}</td></tr>
       <tr><th>Pilot</th><td>{f.pilot_name ?? '—'}</td></tr>
-      <tr><th>Glider</th><td>{f.glider_type ?? '—'}</td></tr>
+      <tr>
+        <th>Glider</th>
+        <td>
+          {#if f.glider_model}
+            {f.glider_brand}
+            {f.glider_model}
+            {#if f.glider_type && f.glider_type !== `${f.glider_brand} ${f.glider_model}`}
+              <span class="block text-sm text-gray-500" title="As written in the file">{f.glider_type}</span>
+            {/if}
+          {:else}
+            {f.glider_type ?? '—'}
+          {/if}
+        </td>
+      </tr>
       <tr><th>Duration</th><td>{formatDuration(f.duration_s)}</td></tr>
       <tr><th>Max altitude</th><td>{f.max_altitude != null ? `${f.max_altitude} m` : '—'}</td></tr>
       <tr><th>XContest score</th><td>{formatScore(f.score_xcontest, noScore)}</td></tr>

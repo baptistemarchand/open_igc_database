@@ -1,7 +1,8 @@
 /**
  * Processor Worker: consumes the flight-processing queue that every upload feeds
  * (src/lib/upload.ts). For each flight it reads the stored file, computes the full
- * `suspicious` bitmask and, for clean flights, the XC scores, then sets `processed_at`.
+ * `suspicious` bitmask and, for clean flights, the XC scores, links the glider (migration
+ * 0010), then sets `processed_at`.
  * Until then the flight is hidden from /browse and left out of /stats.
  *
  * `processed_at IS NULL` is the source of truth, not the queue: a send can fail after
@@ -9,6 +10,7 @@
  * queue nobody reads. The cron sweep re-enqueues whatever is still unprocessed.
  */
 import IGCParser from 'igc-parser';
+import { gliderKey, resolveGliderSql } from '../../../src/lib/glider.ts';
 import { gunzipCapped, isGzip } from '../../../src/lib/gzip.ts';
 import { SUSPICIOUS, suspiciousFlags, trackFixes, trackFlags } from '../../../src/lib/suspicious.ts';
 import { scoreFlight } from '../../../scripts/lib/xcscore.ts';
@@ -73,9 +75,9 @@ function analyze(id: string, text: string, row: { duration_s: number; max_altitu
 
 /** I/O errors (D1, R2) propagate, so the caller retries the message. */
 async function processFlight(env: Env, id: string): Promise<void> {
-  const row = await env.DB.prepare('SELECT duration_s, max_altitude FROM flights WHERE id = ?')
+  const row = await env.DB.prepare('SELECT duration_s, max_altitude, glider_type FROM flights WHERE id = ?')
     .bind(id)
-    .first<{ duration_s: number; max_altitude: number | null }>();
+    .first<{ duration_s: number; max_altitude: number | null; glider_type: string | null }>();
   if (!row) return; // deleted since it was queued
 
   let outcome: Outcome;
@@ -90,11 +92,36 @@ async function processFlight(env: Env, id: string): Promise<void> {
     outcome = buf ? analyze(id, new TextDecoder().decode(buf), row) : UNPROCESSABLE;
   }
 
-  await env.DB.prepare(
-    'UPDATE flights SET suspicious = ?, score_xcontest = ?, score_ffvl = ?, processed_at = ? WHERE id = ?',
-  )
-    .bind(outcome.suspicious, outcome.score_xcontest, outcome.score_ffvl, Math.floor(Date.now() / 1000), id)
-    .run();
+  // The glider link comes from metadata, not the file, so even an unprocessable flight
+  // gets one. A new alias resolves against the curated keys as it is created; a later
+  // sync of data/gliders.csv re-resolves every alias.
+  const key = gliderKey(row.glider_type);
+  const brand = key?.brand_key ?? '';
+  const model = key?.model_key ?? '';
+  await env.DB.batch([
+    ...(key
+      ? [
+          env.DB.prepare(
+            `INSERT INTO glider_aliases (brand_key, model_key, glider_id)
+             VALUES (?1, ?2, ${resolveGliderSql('?1', '?2')})
+             ON CONFLICT (brand_key, model_key) DO NOTHING`,
+          ).bind(brand, model),
+        ]
+      : []),
+    env.DB.prepare(
+      `UPDATE flights SET suspicious = ?1, score_xcontest = ?2, score_ffvl = ?3, processed_at = ?4,
+         glider_alias_id = (SELECT id FROM glider_aliases WHERE brand_key = ?5 AND model_key = ?6)
+       WHERE id = ?7`,
+    ).bind(
+      outcome.suspicious,
+      outcome.score_xcontest,
+      outcome.score_ffvl,
+      Math.floor(Date.now() / 1000),
+      brand,
+      model,
+      id,
+    ),
+  ]);
 }
 
 export default {

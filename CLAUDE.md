@@ -217,6 +217,28 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
     Without `<dir>` the script fetches targets from R2, which is the right mode once the
     corpus has had its first full pass. Results are written as they come (hours for a
     full pass), so resume is re-running.
+- **Gliders are curated, flights link through an alias** (migration 0010).
+  `gliderKey` (`src/lib/glider.ts`) turns the free-text `glider_type` into
+  `(brand_key, model_key)`: lowercase letters and digits, a known brand set apart
+  (`BRANDS`), a trailing letter size dropped (a size is the same glider), placeholders
+  (`NKN`, `not set`… ~49% of prod) → null. Each distinct key is a `glider_aliases` row;
+  `flights.glider_alias_id` points at it, and the alias's `glider_id` is resolved from
+  `glider_keys`, rebuilt from `data/gliders.csv`. Things to keep:
+  - **`glider_type` is never rewritten**: it's what the file says; the link is derived.
+  - **Curation changes rewrite aliases, never flights.** `npm run gliders:remote` syncs
+    the CSV (gliders upserted by slug, so ids stay stable) and re-resolves every alias.
+    `-- --link` also links unlinked flights: needed once for the pre-0010 corpus and after
+    adding a brand to `BRANDS` (that changes keys), not for new uploads.
+  - **Only the processor links new uploads**, like the other processed columns:
+    `glider_alias_id` is in `ProcessedColumns`, so a client can't claim one.
+  - Resolution (`resolveGliderSql`): exact `(brand, model)` key, else a brandless alias
+    matches on model alone **only if a single glider lists that key**. Pass it `?` params
+    or _qualified_ columns: a bare `brand_key` binds to `glider_keys` inside its subqueries
+    and matched every alias to the first glider.
+  - `data/gliders.csv` was seeded from the 318 most common prod model keys (~80% of the
+    flights that name a glider). The unmapped aliases ordered by flight count are the
+    to-do list. Numeric sizes (`Sigma 10 25`) can't be told from generations, so they're
+    merged by listing several keys on one glider.
 - **Sort tiebreakers follow the sort direction** (`ORDER BY <col> ${dir}, id ${dir}`), and
   migration 0004 adds `(duration_s, id)` / `(max_altitude, id)` to go with 0002's
   `(flight_date, id)`. The indexes are the real fix — those two columns had none, so

@@ -13,10 +13,28 @@ export interface Flight extends FlightMetadata {
   score_ffvl: number | null;
   /** Epoch seconds when workers/processor handled the flight, NULL until then. */
   processed_at: number | null;
+  /** `glider_aliases` row of the normalized glider_type (migration 0010), NULL until
+   *  processed or when glider_type names no glider. */
+  glider_alias_id: number | null;
 }
 
 /** Columns only the processor writes. An upload never sets them. */
-type ProcessedColumns = 'suspicious' | 'score_xcontest' | 'score_ffvl' | 'processed_at';
+type ProcessedColumns = 'suspicious' | 'score_xcontest' | 'score_ffvl' | 'processed_at' | 'glider_alias_id';
+
+/**
+ * The curated glider a flight resolves to, both NULL when its alias isn't mapped (yet):
+ * show `glider_type` then. Joined in by the read queries, never stored on the flight.
+ */
+export interface GliderName {
+  glider_brand: string | null;
+  glider_model: string | null;
+}
+
+/** Joins the curated glider name, as `GliderName`, onto `flights f`. Two primary-key
+ *  lookups per row. */
+const GLIDER_JOIN = `LEFT JOIN glider_aliases ga ON ga.id = f.glider_alias_id
+  LEFT JOIN gliders g ON g.id = ga.glider_id`;
+const GLIDER_COLUMNS = 'g.brand AS glider_brand, g.model AS glider_model';
 
 /** A flight as an upload produces it. */
 export type NewFlight = Omit<Flight, ProcessedColumns>;
@@ -68,8 +86,11 @@ export async function deleteFlight(db: D1Database, id: string): Promise<void> {
   await db.prepare('DELETE FROM flights WHERE id = ?').bind(id).run();
 }
 
-export async function getFlight(db: D1Database, id: string): Promise<Flight | null> {
-  return db.prepare('SELECT * FROM flights WHERE id = ?').bind(id).first<Flight>();
+export async function getFlight(db: D1Database, id: string): Promise<(Flight & GliderName) | null> {
+  return db
+    .prepare(`SELECT f.*, ${GLIDER_COLUMNS} FROM flights f ${GLIDER_JOIN} WHERE f.id = ?`)
+    .bind(id)
+    .first<Flight & GliderName>();
 }
 
 /**
@@ -187,6 +208,8 @@ export const FLIGHT_COLUMNS = [
   'score_ffvl',
   // Added by migration 0009.
   'processed_at',
+  // Added by migration 0010.
+  'glider_alias_id',
 ] as const satisfies readonly (keyof Flight)[];
 
 export type FlightColumn = (typeof FLIGHT_COLUMNS)[number];
@@ -272,7 +295,7 @@ export interface SearchParams {
 }
 
 export interface SearchResult {
-  flights: Flight[];
+  flights: (Flight & GliderName)[];
   total: number;
 }
 
@@ -339,14 +362,16 @@ export async function searchFlights(db: D1Database, p: SearchParams): Promise<Se
   // `ORDER BY max_altitude ASC` leads with every NULL row as a single run. `id` is a
   // content hash, so its direction is arbitrary; all that matters is a total, stable
   // order. See migration 0004 for the measurements.
+  //
+  // `f.id`, qualified: the glider join brings two more `id` columns.
   const { results } = await db
     .prepare(
-      `SELECT * FROM flights ${whereSql}
-       ORDER BY ${sortCol} ${dir}, id ${dir}
+      `SELECT f.*, ${GLIDER_COLUMNS} FROM flights f ${GLIDER_JOIN} ${whereSql}
+       ORDER BY ${sortCol} ${dir}, f.id ${dir}
        LIMIT ? OFFSET ?`,
     )
     .bind(...args, limit, offset)
-    .all<Flight>();
+    .all<Flight & GliderName>();
 
   return { flights: results ?? [], total };
 }

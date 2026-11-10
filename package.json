@@ -19,6 +19,8 @@
     "backfill:takeoff": "tsx scripts/backfill-takeoff-time.ts",
     "backfill:suspicious": "tsx scripts/backfill-suspicious.ts",
     "backfill:xcscore": "tsx scripts/backfill-xc-score.ts",
+    "gliders:local": "tsx scripts/gliders.ts --local",
+    "gliders:remote": "tsx scripts/gliders.ts --remote",
     "stats:local": "wrangler d1 execute open-igc-db --local --file scripts/compute-stats.sql",
     "stats:remote": "wrangler d1 execute open-igc-db --remote --file scripts/compute-stats.sql"
   },
