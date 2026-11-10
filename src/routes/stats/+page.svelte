@@ -13,6 +13,10 @@
     return `${k < 10 ? k.toFixed(1).replace(/\.0$/, '') : Math.round(k)}k`;
   }
 
+  // JSON from the snapshot carries no order: rank by what the chart shows.
+  const gliders = $derived([...stats.perGlider].sort((a, b) => b.median - a.median || b.flights - a.flights));
+  const maxMedian = $derived(Math.max(1, ...gliders.map((g) => g.median)));
+
   // Flights are only counted up to the last refresh, so its year is the one that can be partial.
   const partialYear = $derived(String(new Date(stats.computedAt * 1000).getUTCFullYear()));
 </script>
@@ -59,7 +63,6 @@
       </div>
     </a>
   {/if}
-
 </section>
 
 <h2>Flights per year</h2>
@@ -75,6 +78,34 @@
   </div>
   <figcaption class="muted">The lighter bar is the year of the snapshot, which may be incomplete.</figcaption>
 </figure>
+
+{#if gliders.length > 0}
+  <h2>Median score by glider</h2>
+  <figure>
+    <div class="hchart" role="img" aria-label="Bar chart of the median XContest score of the most flown gliders">
+      {#each gliders as g (g.slug)}
+        <div
+          class="hrow"
+          title="{g.brand} {g.model}: median {g.median} pts over {g.flights.toLocaleString('en')} flights"
+        >
+          <span class="hlabel">
+            {g.brand}
+            {g.model}
+            <span class="hsub">{g.flights.toLocaleString('en')} {g.flights === 1 ? 'flight' : 'flights'}</span>
+          </span>
+          <span class="htrack">
+            <span class="hbar" style:width="{(g.median / maxMedian) * 100}%"></span>
+            <span class="hvalue">{Math.round(g.median)} pts</span>
+          </span>
+        </div>
+      {/each}
+    </div>
+    <figcaption class="muted">
+      Best median XContest scores among gliders with at least 50 scored flights. A median says as much about who flies a
+      glider as about the glider.
+    </figcaption>
+  </figure>
+{/if}
 
 <style>
   .muted {
@@ -154,6 +185,50 @@
   figcaption {
     margin-top: 2rem;
   }
+  figure + h2 {
+    margin-top: 2.5rem;
+  }
+  .hchart {
+    display: grid;
+    gap: 6px;
+    margin-top: 1rem;
+  }
+  .hrow {
+    display: grid;
+    grid-template-columns: 13rem 1fr;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .hlabel {
+    text-align: right;
+    font-size: 0.9rem;
+    line-height: 1.2;
+  }
+  .hsub {
+    display: block;
+    color: #777;
+    font-size: 0.75rem;
+  }
+  .htrack {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+  .hbar {
+    height: 1.1rem;
+    background: #0064c8;
+    border-radius: 0 3px 3px 0;
+    min-width: 1px;
+  }
+  .hvalue {
+    font-size: 0.8rem;
+    color: #555;
+    white-space: nowrap;
+  }
+  .hchart + figcaption {
+    margin-top: 1rem;
+  }
   /* Too small to read on a phone; the title tooltip still carries the full values. */
   @media (max-width: 600px) {
     .count,
@@ -165,6 +240,18 @@
     }
     figcaption {
       margin-top: 0.75rem;
+    }
+    /* Label above its bar: a side column would leave the bars no room. */
+    .hrow {
+      grid-template-columns: 1fr;
+      gap: 2px;
+    }
+    .hlabel {
+      text-align: left;
+    }
+    .hsub {
+      display: inline;
+      margin-left: 0.3rem;
     }
   }
 </style>

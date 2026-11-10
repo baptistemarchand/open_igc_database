@@ -155,7 +155,9 @@ Read` on the token (`scripts/import.env`) — without that scope it silently ret
     when a filter is set; that one is unavoidable and is not the common case.
 - **`/stats` reads a precomputed snapshot, never live aggregates.** The `stats` table
   (migration 0005) holds one row: flight count, the ids of the longest/highest flights,
-  and per-year counts as JSON. It is refreshed **by hand** with `scripts/compute-stats.sql`
+  per-year counts as JSON, and (0011) the 15 gliders with the best median XContest score
+  among those with at least 50 scored flights. SQLite has no `MEDIAN`: it's `ROW_NUMBER()` over each glider's
+  scores, averaging the middle one or two. It is refreshed **by hand** with `scripts/compute-stats.sql`
   (`npm run stats:remote`), and counts processed, non-suspicious flights only — the
   per-year `GROUP BY` is a full date-index scan (~187k
   reads), so it must not run per request. Record flights are stored as ids and joined at

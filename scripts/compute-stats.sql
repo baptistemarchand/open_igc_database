@@ -15,7 +15,7 @@
 -- small partial indexes), which keeps the big scan covering instead of a table lookup
 -- per row.
 INSERT OR REPLACE INTO stats
-  (id, computed_at, flight_count, longest_id, highest_id, best_xcontest_id, best_ffvl_id, per_year)
+  (id, computed_at, flight_count, longest_id, highest_id, best_xcontest_id, best_ffvl_id, per_year, per_glider)
 SELECT
   1,
   CAST(strftime('%s', 'now') AS INTEGER),
@@ -38,4 +38,24 @@ SELECT
                           FROM flights WHERE suspicious IS NOT NULL GROUP BY y) b USING (y)
              LEFT JOIN (SELECT substr(flight_date, 1, 4) AS y, COUNT(*) AS pending
                           FROM flights WHERE processed_at IS NULL GROUP BY y) c USING (y)
-            ORDER BY a.y));
+            ORDER BY a.y)),
+  -- The 15 gliders with the best median XContest score, among those with at least 50
+  -- scored flights (below that, a few big days decide the median). SQLite has no
+  -- MEDIAN: number each glider's scores in order and average the middle one or two.
+  -- Walks the flights that have a glider alias (idx_flights_glider_alias, then a row
+  -- lookup for the filters): about half the table.
+  (SELECT COALESCE(json_group_array(json_object(
+            'slug', g.slug, 'brand', g.brand, 'model', g.model,
+            'flights', m.n, 'median', ROUND(m.median, 1))), '[]')
+     FROM (SELECT gid, n, AVG(score) AS median
+             FROM (SELECT ga.glider_id AS gid, f.score_xcontest AS score,
+                          ROW_NUMBER() OVER (PARTITION BY ga.glider_id ORDER BY f.score_xcontest) AS rn,
+                          COUNT(*) OVER (PARTITION BY ga.glider_id) AS n
+                     FROM flights f JOIN glider_aliases ga ON ga.id = f.glider_alias_id
+                    WHERE ga.glider_id IS NOT NULL AND f.suspicious IS NULL
+                      AND f.processed_at IS NOT NULL AND f.score_xcontest IS NOT NULL)
+            WHERE rn IN ((n + 1) / 2, (n + 2) / 2) AND n >= 50
+            GROUP BY gid, n
+            ORDER BY median DESC, gid
+            LIMIT 15) m
+     JOIN gliders g ON g.id = m.gid);
