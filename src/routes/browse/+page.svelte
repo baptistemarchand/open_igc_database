@@ -105,7 +105,7 @@
           <tr class="hover:bg-blue-50">
             <td>{f.flight_date}</td>
             <td>{f.pilot_name ?? '—'}</td>
-            <td>{f.glider_model ? `${f.glider_brand} ${f.glider_model}` : (f.glider_type ?? '—')}</td>
+            <td>{f.glider_model ? `${f.glider_brand} ${f.glider_model}` : '—'}</td>
             <td class="text-right">{formatDuration(f.duration_s)}</td>
             <td class="text-right">{f.max_altitude != null ? `${f.max_altitude} m` : '—'}</td>
             <td class="text-right">{formatScore(f.score_xcontest)}</td>
